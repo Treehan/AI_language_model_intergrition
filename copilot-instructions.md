@@ -1,7 +1,7 @@
 # GitHub Copilot Instructions
-- 本專案使用 Next.js (App Router) 與 TypeScript 進行開發。
-- UI 開發請優先使用 shadcn/ui 與 Tailwind CSS 進行樣式設計。
-- 資料庫 (Firestore)、身分驗證與儲存空間請一律呼叫 Firebase API。
-- 請遵循 DRY 原則，撰寫模組化、可重複使用的 React 組件與 Hooks。
-- 撰寫程式碼時，遇到複雜邏輯請加上繁體中文註解說明思考過程。
-- 關於完整的技術堆疊、目錄結構與系統架構，請嚴格參考 `ARCHITECTURE.md`。
+- This project uses Next.js (App Router) and TypeScript.
+- Prioritize shadcn/ui and Tailwind CSS for UI components and styling.
+- Use Firebase API for database (Firestore), authentication, and storage.
+- Follow the DRY principle; write modular and reusable React components and Hooks.
+- Add comments in Traditional Chinese to explain your thought process when writing complex logic.
+- Strictly refer to `ARCHITECTURE.md` for the complete tech stack, directory structure, and development guidelines.
