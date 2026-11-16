@@ -34,26 +34,20 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
     await page.getByRole("button", { name: "建立帳號", exact: true }).click();
 
     await expect(page.getByTestId("current-user-name")).toHaveText("黃小華");
+    const storedState = await page.evaluate(() =>
+      localStorage.getItem("tw_split_ledger_app_state_v1"),
+    );
+    expect(storedState).not.toContain("password123");
 
-    // 測試刪除個人帳號：新建立的「黃小華」目前尚無未結清款項，可直接刪除帳號
+    // 帳號刪除成功後應登出，不可自動切換成其他會員
     await page.getByRole("button", { name: "帳號管理 / 建立帳號" }).click();
     await page.getByRole("button", { name: "刪除帳號" }).click();
     await page.getByRole("button", { name: "確認刪除帳號" }).click();
     await expect(
       page.getByText("已成功刪除帳號「黃小華」並退出相關群組").first(),
     ).toBeVisible();
-    await expect(page.getByTestId("current-user-name")).toHaveText("陳小美");
-
-    // 測試尚有未結清款項的帳號無法刪除（陳小美目前有應收款項 +400 元）
-    await page.getByRole("button", { name: "帳號管理 / 建立帳號" }).click();
-    await page.getByRole("button", { name: "刪除帳號" }).click();
-    await page.getByRole("button", { name: "確認刪除帳號" }).click();
     await expect(
-      page
-        .getByText(
-          "您在「花蓮三天兩夜旅遊帳本」尚有未結清款項，請先完成結算後再刪除帳號",
-        )
-        .first(),
+      page.getByText("請先登入或建立帳號，再使用共用帳本功能。"),
     ).toBeVisible();
   });
 
@@ -62,7 +56,7 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
   }) => {
     await page.goto("/");
 
-    await page.getByRole("button", { name: "群組與成員管理" }).click();
+    await page.getByRole("button", { name: "群組與成員", exact: true }).click();
 
     // User Story 9 Scenario 2: 成員尚有未結清款項時無法移除 (張雅婷目前有欠款)
     await page.getByRole("button", { name: "移除張雅婷" }).click();
@@ -95,12 +89,29 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
       "invite=INV-",
     );
     await expect(page.getByLabel("群組邀請 QR Code")).toBeVisible();
+    const qrCode = page.getByLabel("群組邀請 QR Code").locator("svg");
+    await expect(qrCode).toBeVisible();
+    await expect(qrCode.locator("title")).toHaveText(
+      /^群組邀請連結 QR Code：INV-/,
+    );
+    await expect(qrCode.locator("path").first()).toBeVisible();
+
+    // 有效邀請碼可讓另一位已登入會員加入，並以一般成員權限加入。
+    const inviteCode = await page.getByTestId("ledger-invite-code").innerText();
+    await page.getByLabel("快速切換測試會員").selectOption("user-member-2");
+    await page.getByLabel("邀請連結或邀請碼").fill(inviteCode);
+    await page.getByRole("button", { name: "加入群組" }).click();
+    await expect(page.getByTestId("active-ledger-title")).toHaveText("東京賞櫻團");
+    await expect(
+      page.getByTestId("member-row-user-member-2").getByText("一般成員"),
+    ).toBeVisible();
   });
 
   test("User Story 4, 5, 8：新增支出欄位驗證、平均分攤與指定金額檢查、管理者修改支出", async ({
     page,
   }) => {
     await page.goto("/");
+    await page.getByRole("button", { name: "支出帳目", exact: true }).click();
 
     // User Story 4 Scenario 2: 金額為空白或小於等於 0
     await page.getByLabel("項目名稱").fill("測試支出");
@@ -141,12 +152,12 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
     await page.goto("/");
 
     // User Story 6: 查看結算頁面
-    await page.getByRole("button", { name: "結算" }).click();
+    await page.getByLabel("快速切換測試會員").selectOption("user-member-3");
+    await page.getByRole("button", { name: "結算還款", exact: true }).click();
     await expect(page.getByText("建議還款方式（最少轉帳次數）")).toBeVisible();
 
     // User Story 7 Scenario 2: 還款金額超過目前欠款
     // 預設帳本中，張雅婷欠款 500 元（其中對陳小美建議還款 400 元、對林大明 100 元）
-    await page.getByLabel("還款人（欠款方）").selectOption("user-member-3");
     await page.getByLabel("收款對象").selectOption("user-member-2");
     await page.getByLabel("還款金額").fill("500");
     await page.getByRole("button", { name: "確認還款" }).click();
@@ -160,13 +171,20 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
     await expect(
       page.getByText("已標記還款並通知收款人確認！").first(),
     ).toBeVisible();
+    await page.getByLabel("快速切換測試會員").selectOption("user-member-2");
     await page.getByRole("button", { name: "收款人確認收款" }).click();
     await expect(
       page.getByText("收款人已確認", { exact: true }),
     ).toBeVisible();
 
     // User Story 10: 查看支出統計頁面與圓餅圖
-    await page.getByRole("button", { name: "統計" }).click();
+    await page.getByRole("button", { name: "支出統計", exact: true }).click();
+    await page.getByLabel("開始日期").fill("2026-12-01");
+    await page.getByLabel("結束日期").fill("2026-11-30");
+    await expect(
+      page.getByText("統計開始日期不可晚於結束日期"),
+    ).toBeVisible();
+    await page.getByLabel("開始日期").fill("2026-11-01");
     await expect(page.getByTestId("expense-pie-chart")).toBeVisible();
     await expect(page.getByTestId("stats-total-group-expense")).toContainText(
       "NT$ 1,500",

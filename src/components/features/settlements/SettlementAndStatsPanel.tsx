@@ -67,28 +67,27 @@ export function SettlementAndStatsPanel({
   onCreateRepayment,
   onConfirmRepayment,
 }: SettlementAndStatsPanelProps) {
-  // 預設選擇第一位欠款人與收款人以方便快速測試與操作
-  const defaultDebtor =
-    suggestedTransfers[0]?.fromUid ??
-    ledger.members.find((m) => (netBalances[m] ?? 0) < 0) ??
-    currentUserUid;
+  // 預設收款對象為建議結算中的第一位債權人
   const defaultCreditor =
-    suggestedTransfers[0]?.toUid ??
-    ledger.members.find((m) => (netBalances[m] ?? 0) > 0) ??
-    ledger.members[0] ??
+    suggestedTransfers.find((transfer) => transfer.fromUid === currentUserUid)
+      ?.toUid ??
+    ledger.members.find(
+      (member) => member !== currentUserUid && (netBalances[member] ?? 0) > 0,
+    ) ??
+    ledger.members.find((member) => member !== currentUserUid) ??
     "";
 
-  const [fromUid, setFromUid] = React.useState(defaultDebtor);
   const [toUid, setToUid] = React.useState(defaultCreditor);
   const [repayAmountStr, setRepayAmountStr] = React.useState("");
 
   const handleRepaySubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const parsed =
-      repayAmountStr.trim() === ""
-        ? 0
-        : Number.parseInt(repayAmountStr.trim(), 10);
-    onCreateRepayment(fromUid, toUid, Number.isNaN(parsed) ? 0 : parsed);
+    const parsed = repayAmountStr.trim() === "" ? 0 : Number(repayAmountStr);
+    onCreateRepayment(
+      currentUserUid,
+      toUid,
+      Number.isNaN(parsed) ? 0 : parsed,
+    );
   };
 
   if (mode === "statistics") {
@@ -120,6 +119,22 @@ export function SettlementAndStatsPanel({
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
+            {feedbackError && (
+              <div
+                role="alert"
+                className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800"
+              >
+                {feedbackError}
+              </div>
+            )}
+            {feedbackSuccess && (
+              <div
+                role="status"
+                className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800"
+              >
+                {feedbackSuccess}
+              </div>
+            )}
             {/* 時間範圍篩選器 (User Story 10) */}
             <div className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
               <div>
@@ -354,33 +369,23 @@ export function SettlementAndStatsPanel({
         <CardHeader>
           <CardTitle>標記已還款</CardTitle>
           <CardDescription>
-            選擇還款人與收款對象並輸入整數金額，送出後將通知收款人確認
+            輸入還款金額並選擇收款對象，送出後將通知收款人確認
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form
-            onSubmit={handleRepaySubmit}
-            className="grid gap-4 sm:grid-cols-4 sm:items-end"
-          >
+          {(netBalances[currentUserUid] ?? 0) < 0 ? (
+            <form
+              onSubmit={handleRepaySubmit}
+              className="grid gap-4 sm:grid-cols-4 sm:items-end"
+            >
             <div>
-              <label
-                htmlFor="repay-from-select"
-                className="mb-1 block text-xs font-medium text-slate-700"
-              >
-                還款人（欠款方）
-              </label>
-              <select
-                id="repay-from-select"
-                value={fromUid}
-                onChange={(e) => setFromUid(e.target.value)}
-                className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-              >
-                {ledger.members.map((uid) => (
-                  <option key={uid} value={uid}>
-                    {ledger.memberProfiles[uid]?.displayName ?? uid}
-                  </option>
-                ))}
-              </select>
+              <span className="mb-1 block text-xs font-medium text-slate-700">
+                還款人（目前登入會員）
+              </span>
+              <p className="flex h-10 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700">
+                {ledger.memberProfiles[currentUserUid]?.displayName ??
+                  currentUserUid}
+              </p>
             </div>
 
             <div>
@@ -396,11 +401,13 @@ export function SettlementAndStatsPanel({
                 onChange={(e) => setToUid(e.target.value)}
                 className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
               >
-                {ledger.members.map((uid) => (
+                {ledger.members
+                  .filter((uid) => uid !== currentUserUid)
+                  .map((uid) => (
                   <option key={uid} value={uid}>
                     {ledger.memberProfiles[uid]?.displayName ?? uid}
                   </option>
-                ))}
+                  ))}
               </select>
             </div>
 
@@ -414,6 +421,8 @@ export function SettlementAndStatsPanel({
               <Input
                 id="repay-amount-input"
                 type="number"
+                min="1"
+                max="1000000000000"
                 step="1"
                 placeholder="輸入還款金額"
                 value={repayAmountStr}
@@ -422,7 +431,12 @@ export function SettlementAndStatsPanel({
             </div>
 
             <Button type="submit">確認還款</Button>
-          </form>
+            </form>
+          ) : (
+            <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              您目前沒有待還款項。
+            </p>
+          )}
 
           {/* 還款紀錄列表與收款人確認按鈕 */}
           {repayments.length > 0 && (
@@ -458,7 +472,8 @@ export function SettlementAndStatsPanel({
                       </span>
                     </div>
 
-                    {rep.status === "pending" && (
+                    {rep.status === "pending" &&
+                      rep.toUid === currentUserUid && (
                       <Button
                         type="button"
                         size="sm"

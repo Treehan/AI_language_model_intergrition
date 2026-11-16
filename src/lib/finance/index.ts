@@ -40,6 +40,9 @@ export function validateExpenseInput(params: {
   ) {
     return { valid: false, error: "請輸入大於 0 的金額" };
   }
+  if (params.amount > 1_000_000_000_000) {
+    return { valid: false, error: "金額不可超過 1,000,000,000,000 元" };
+  }
   if (params.participants.length === 0) {
     return { valid: false, error: "請至少選擇一位分攤成員" };
   }
@@ -297,6 +300,9 @@ export function validateRepaymentAmount(params: {
   if (!Number.isSafeInteger(amount) || amount <= 0) {
     return { valid: false, error: "請輸入大於 0 的整數還款金額" };
   }
+  if (amount > 1_000_000_000_000) {
+    return { valid: false, error: "還款金額不可超過 1,000,000,000,000 元" };
+  }
 
   const maxAllowed = getMaxRepayableAmount(netBalances, fromUid, toUid);
   if (maxAllowed <= 0) {
@@ -348,6 +354,30 @@ const ALL_CATEGORIES: readonly ExpenseCategory[] = [
   "其他",
 ];
 
+function isValidISODate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+export function validateStatisticsDateRange(
+  startDate?: string,
+  endDate?: string,
+): { valid: boolean; error?: string } {
+  if (startDate && !isValidISODate(startDate)) {
+    return { valid: false, error: "請選擇有效的統計開始日期" };
+  }
+  if (endDate && !isValidISODate(endDate)) {
+    return { valid: false, error: "請選擇有效的統計結束日期" };
+  }
+  if (startDate && endDate && startDate > endDate) {
+    return { valid: false, error: "統計開始日期不可晚於結束日期" };
+  }
+  return { valid: true };
+}
+
 /**
  * 依時間範圍與類別計算支出統計（User Story 10）
  * 所有百分比以 BigInt 整數運算（最大餘數法分配百分比餘數，確保有支出時各類別百分比整數總和為 100）。
@@ -362,6 +392,10 @@ export function calculateExpenseStatistics(params: {
   endDate?: string;
 }): ExpenseStatisticsSummary {
   const { transactions, userUid, startDate, endDate } = params;
+  const dateRange = validateStatisticsDateRange(startDate, endDate);
+  if (!dateRange.valid) {
+    throw new Error(dateRange.error);
+  }
 
   const filtered = transactions.filter((tx) => {
     if (startDate && tx.date < startDate) {

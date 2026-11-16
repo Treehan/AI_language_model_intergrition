@@ -12,8 +12,19 @@ describe("小組記帳與分帳 App - 整合單元測試 (User Stories 1–10)",
     expect(screen.getByTestId("active-ledger-title")).toHaveTextContent(
       "花蓮三天兩夜旅遊帳本",
     );
+    const navigation = screen.getByRole("navigation", {
+      name: "主要功能導覽",
+    });
+    expect(navigation).toHaveTextContent("帳本總覽");
+    expect(navigation).toHaveTextContent("支出帳目");
+    expect(navigation).toHaveTextContent("結算還款");
+    expect(navigation).toHaveTextContent("支出統計");
+    expect(navigation).toHaveTextContent("群組與成員");
 
     // 測試新增一筆 1000 元平均分攤支出 (User Story 4 & 5)
+    fireEvent.click(
+      screen.getByRole("button", { name: /^支出帳目$/ }),
+    );
     fireEvent.change(screen.getByLabelText("項目名稱"), {
       target: { value: "溫泉飯店住宿" },
     });
@@ -25,11 +36,15 @@ describe("小組記帳與分帳 App - 整合單元測試 (User Stories 1–10)",
     expect(screen.getByText("溫泉飯店住宿")).toBeInTheDocument();
 
     // 切換到「結算」頁籤 (User Story 6)
-    fireEvent.click(screen.getByRole("button", { name: "結算" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /^結算還款$/ }),
+    );
     expect(screen.getByText("建議還款方式（最少轉帳次數）")).toBeInTheDocument();
 
     // 切換到「統計」頁籤 (User Story 10)
-    fireEvent.click(screen.getByRole("button", { name: "統計" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /^支出統計$/ }),
+    );
     expect(screen.getByTestId("expense-pie-chart")).toBeInTheDocument();
   });
 });
