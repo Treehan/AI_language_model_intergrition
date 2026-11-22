@@ -135,15 +135,18 @@ export const transactionConverter: FirestoreDataConverter<Transaction> = {
 export const repaymentConverter: FirestoreDataConverter<Repayment> = {
   toFirestore(rep: Repayment): DocumentData {
     assertSafeIntegerAmount(rep.amount, "還款儲存金額");
-    return {
+    const data: DocumentData = {
       ledgerId: rep.ledgerId,
       fromUid: rep.fromUid,
       toUid: rep.toUid,
       amount: rep.amount,
       status: rep.status,
       createdAt: rep.createdAt,
-      confirmedAt: rep.confirmedAt ?? null,
     };
+    if (rep.confirmedAt) {
+      data.confirmedAt = rep.confirmedAt;
+    }
+    return data;
   },
   fromFirestore(
     snapshot: QueryDocumentSnapshot,

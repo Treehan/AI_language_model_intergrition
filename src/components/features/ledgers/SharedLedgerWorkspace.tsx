@@ -1,5 +1,6 @@
 "use client";
 
+import { onAuthStateChanged } from "firebase/auth";
 /**
  * 應用程式主工作區容器
  * 負載狀態管理、計算結果並將純資料與回呼傳遞給 components/features/* 下的純顯示元件
@@ -23,6 +24,7 @@ import {
   type AppDatabaseState,
   confirmRepaymentInState,
   createInitialAppState,
+  createEmptyAppState,
   createLedgerInState,
   createRepaymentInState,
   deleteAccountInState,
@@ -35,18 +37,36 @@ import {
   toggleLedgerInviteInState,
   updateExpenseInState,
 } from "@/lib/ledgers";
+import {
+  getFirebaseAuthErrorMessage,
+  getOrCreateFirebaseUserProfile,
+  registerFirebaseAccount,
+  signInFirebaseAccount,
+  signOutFirebaseAccount,
+} from "@/lib/firebase/auth";
+import { getFirebaseClientAuth, isFirebaseEnabled } from "@/lib/firebase/client";
+import {
+  createFirebaseDocumentId,
+  joinFirebaseLedgerByInvite,
+  persistAppStateChanges,
+  subscribeToFirebaseWorkspace,
+} from "@/lib/firebase/workspace";
 import type { CurrencyCode } from "@/types/ledger";
 
 type WorkspaceTab = "expenses" | "settlement" | "statistics" | "group";
 
 export function SharedLedgerWorkspace() {
+  const firebaseMode = isFirebaseEnabled();
   const [appState, setAppState] = React.useState<AppDatabaseState>(() =>
-    createInitialAppState(),
+    firebaseMode ? createEmptyAppState() : createInitialAppState(),
   );
   const [activeLedgerId, setActiveLedgerId] = React.useState<string>(
-    "ledger-taipei-trip",
+    firebaseMode ? "" : "ledger-taipei-trip",
   );
-  const [activeTab, setActiveTab] = React.useState<WorkspaceTab>("expenses");
+  const [activeTab, setActiveTab] = React.useState<WorkspaceTab>(
+    firebaseMode ? "group" : "expenses",
+  );
+  const [firebaseReady, setFirebaseReady] = React.useState(!firebaseMode);
   const [feedbackError, setFeedbackError] = React.useState<string | null>(null);
   const [feedbackSuccess, setFeedbackSuccess] = React.useState<string | null>(
     null,
@@ -60,6 +80,89 @@ export function SharedLedgerWorkspace() {
     setFeedbackSuccess(null);
   };
 
+  React.useEffect(() => {
+    if (!firebaseMode) {
+      return;
+    }
+
+    let disposed = false;
+    let unsubscribeWorkspace: (() => void) | undefined;
+    const unsubscribeAuth = onAuthStateChanged(
+      getFirebaseClientAuth(),
+      (firebaseUser) => {
+        unsubscribeWorkspace?.();
+        unsubscribeWorkspace = undefined;
+
+        if (!firebaseUser) {
+          setAppState(createEmptyAppState());
+          setActiveLedgerId("");
+          setFirebaseReady(true);
+          return;
+        }
+
+        setFirebaseReady(false);
+        void getOrCreateFirebaseUserProfile(firebaseUser)
+          .then((profile) => {
+            if (
+              disposed ||
+              getFirebaseClientAuth().currentUser?.uid !== firebaseUser.uid
+            ) {
+              return;
+            }
+            unsubscribeWorkspace = subscribeToFirebaseWorkspace(
+              firebaseUser.uid,
+              profile,
+              (state) => {
+                if (!disposed) {
+                  setAppState(state);
+                  setFirebaseReady(true);
+                }
+              },
+              (error) => {
+                if (!disposed) {
+                  setFeedbackError(getFirebaseAuthErrorMessage(error));
+                  setFirebaseReady(true);
+                }
+              },
+            );
+          })
+          .catch((error: unknown) => {
+            if (!disposed) {
+              setFeedbackError(getFirebaseAuthErrorMessage(error));
+              setFirebaseReady(true);
+            }
+          });
+      },
+      (error) => {
+        setFeedbackError(getFirebaseAuthErrorMessage(error));
+        setFirebaseReady(true);
+      },
+    );
+
+    return () => {
+      disposed = true;
+      unsubscribeWorkspace?.();
+      unsubscribeAuth();
+    };
+  }, [firebaseMode]);
+
+  const persistNextState = async (
+    nextState: AppDatabaseState,
+  ): Promise<boolean> => {
+    try {
+      if (firebaseMode) {
+        await persistAppStateChanges(appState, nextState);
+      } else {
+        saveAppState(nextState);
+      }
+      setAppState(nextState);
+      return true;
+    } catch (error) {
+      setFeedbackError(getFirebaseAuthErrorMessage(error));
+      return false;
+    }
+  };
+
   const currentUser = appState.currentUserUid
     ? (appState.users[appState.currentUserUid] ?? null)
     : null;
@@ -67,36 +170,43 @@ export function SharedLedgerWorkspace() {
 
   // 使用者參與的帳本列表
   const userLedgers = Object.values(appState.ledgers).filter((l) =>
-    currentUser ? l.members.includes(currentUser.uid) : true,
+    currentUser ? l.members.includes(currentUser.uid) : !firebaseMode,
   );
 
   const activeLedger =
     appState.ledgers[activeLedgerId] ??
     userLedgers[0] ??
-    Object.values(appState.ledgers)[0]!;
+    (firebaseMode ? null : Object.values(appState.ledgers)[0] ?? null);
+  const selectedLedgerId = activeLedger?.id;
 
-  const currentUserUid = currentUser?.uid ?? activeLedger.members[0] ?? "";
+  const currentUserUid = currentUser?.uid ?? activeLedger?.members[0] ?? "";
   const currentUserRole =
-    activeLedger.roles[currentUserUid] ?? "Member";
+    activeLedger?.roles[currentUserUid] ?? "Member";
 
   const activeTransactions = React.useMemo(
-    () => appState.transactions[activeLedger.id] ?? [],
-    [appState.transactions, activeLedger.id],
+    () =>
+      selectedLedgerId
+        ? appState.transactions[selectedLedgerId] ?? []
+        : [],
+    [appState.transactions, selectedLedgerId],
   );
   const activeRepayments = React.useMemo(
-    () => appState.repayments[activeLedger.id] ?? [],
-    [appState.repayments, activeLedger.id],
+    () =>
+      selectedLedgerId
+        ? appState.repayments[selectedLedgerId] ?? []
+        : [],
+    [appState.repayments, selectedLedgerId],
   );
 
   // 呼叫 lib/finance 純函式計算淨額、最少轉帳建議與統計資料
   const netBalances = React.useMemo(
     () =>
       calculateNetBalances(
-        activeLedger.members,
+        activeLedger?.members ?? [],
         activeTransactions,
         activeRepayments,
       ),
-    [activeLedger.members, activeTransactions, activeRepayments],
+    [activeLedger?.members, activeTransactions, activeRepayments],
   );
 
   const suggestedTransfers = React.useMemo(
@@ -116,12 +226,35 @@ export function SharedLedgerWorkspace() {
   );
 
   // 處理帳號註冊與登入 (User Story 1)
-  const handleRegisterAccount = (params: {
+  const handleRegisterAccount = async (params: {
     identifier: string;
     password: string;
     displayName: string;
-  }): boolean => {
+  }): Promise<boolean> => {
     clearFeedback();
+    if (firebaseMode) {
+      if (!params.identifier.includes("@")) {
+        setFeedbackError("Firebase 登入目前請使用電子郵件地址");
+        return false;
+      }
+      if (!params.displayName.trim()) {
+        setFeedbackError("請輸入暱稱");
+        return false;
+      }
+      try {
+        const user = await registerFirebaseAccount({
+          email: params.identifier,
+          password: params.password,
+          displayName: params.displayName,
+        });
+        setFeedbackSuccess(`歡迎 ${user.displayName}！已成功建立帳號並登入`);
+        return true;
+      } catch (error) {
+        setFeedbackError(getFirebaseAuthErrorMessage(error));
+        return false;
+      }
+    }
+
     const res = registerAccountInState(appState, params);
     if (res.error) {
       setFeedbackError(res.error);
@@ -146,11 +279,22 @@ export function SharedLedgerWorkspace() {
     return true;
   };
 
-  const handleLoginAccount = (params: {
+  const handleLoginAccount = async (params: {
     identifier: string;
     password: string;
-  }): boolean => {
+  }): Promise<boolean> => {
     clearFeedback();
+    if (firebaseMode) {
+      try {
+        await signInFirebaseAccount(params.identifier, params.password);
+        setFeedbackSuccess("登入成功");
+        return true;
+      } catch (error) {
+        setFeedbackError(getFirebaseAuthErrorMessage(error));
+        return false;
+      }
+    }
+
     const res = loginAccountInState(appState, params);
     if (res.error) {
       setFeedbackError(res.error);
@@ -168,8 +312,16 @@ export function SharedLedgerWorkspace() {
     setAppState(next);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     clearFeedback();
+    if (firebaseMode) {
+      try {
+        await signOutFirebaseAccount();
+      } catch (error) {
+        setFeedbackError(getFirebaseAuthErrorMessage(error));
+      }
+      return;
+    }
     const next = { ...appState, currentUserUid: null };
     saveAppState(next);
     setAppState(next);
@@ -177,6 +329,10 @@ export function SharedLedgerWorkspace() {
 
   const handleDeleteAccount = (): boolean => {
     clearFeedback();
+    if (firebaseMode) {
+      setFeedbackError("Firebase 帳號刪除需先完成安全的群組資料處理，目前尚未開放");
+      return false;
+    }
     const res = deleteAccountInState(appState);
     if (res.error) {
       setFeedbackError(res.error);
@@ -188,23 +344,67 @@ export function SharedLedgerWorkspace() {
   };
 
   // User Story 2：建立記帳群組
-  const handleCreateLedger = (name: string, currency: CurrencyCode) => {
+  const handleCreateLedger = async (
+    name: string,
+    currency: CurrencyCode,
+  ): Promise<boolean> => {
     clearFeedback();
-    const res = createLedgerInState(appState, { name, currency });
+    const res = createLedgerInState(appState, {
+      name,
+      currency,
+      ...(firebaseMode
+        ? {
+            id: createFirebaseDocumentId("ledgers"),
+            inviteCode: `INV-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`,
+          }
+        : {}),
+    });
     if (res.error || !res.ledger) {
       setFeedbackError(res.error ?? "建立群組失敗");
-      return;
+      return false;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return false;
+    }
     setActiveLedgerId(res.ledger.id);
     setFeedbackSuccess(
       `已成功建立群組「${res.ledger.name}」，並產生專屬邀請連結與 QR Code！`,
     );
+    return true;
   };
 
   // User Story 3：透過邀請連結加入群組
-  const handleJoinLedger = (inviteCodeOrUrl: string) => {
+  const handleJoinLedger = async (inviteCodeOrUrl: string) => {
     clearFeedback();
+    if (firebaseMode) {
+      if (!currentUser) {
+        setFeedbackError("請先登入再加入群組");
+        return;
+      }
+      try {
+        const inviteUrl = new URL(inviteCodeOrUrl.trim());
+        const ledgerId = inviteUrl.searchParams.get("ledger");
+        if (!ledgerId) {
+          setFeedbackError("請貼上完整的群組邀請連結");
+          return;
+        }
+        await joinFirebaseLedgerByInvite({
+          ledgerId,
+          uid: currentUser.uid,
+          displayName: currentUser.displayName,
+          email: currentUser.email,
+        });
+        setActiveLedgerId(ledgerId);
+        setFeedbackSuccess("已成功加入群組！");
+      } catch (error) {
+        setFeedbackError(
+          error instanceof Error && "code" in error && error.code === "permission-denied"
+            ? "此邀請連結已失效，請向群組管理者索取新連結"
+            : getFirebaseAuthErrorMessage(error),
+        );
+      }
+      return;
+    }
     const res = joinLedgerByInviteInState(appState, inviteCodeOrUrl);
     if (res.error || !res.ledger) {
       setFeedbackError(res.error ?? "加入群組失敗");
@@ -215,20 +415,28 @@ export function SharedLedgerWorkspace() {
     setFeedbackSuccess(`已成功加入群組「${res.ledger.name}」！`);
   };
 
-  const handleToggleInvite = (ledgerId: string, active: boolean) => {
+  const handleToggleInvite = async (ledgerId: string, active: boolean) => {
     clearFeedback();
     const res = toggleLedgerInviteInState(appState, ledgerId, active);
     if (res.error) {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess(active ? "已重新啟用邀請連結" : "已關閉邀請連結");
   };
 
   // User Story 4 & 5：新增支出
-  const handleAddExpense = (payload: ExpenseSubmissionPayload): boolean => {
+  const handleAddExpense = async (
+    payload: ExpenseSubmissionPayload,
+  ): Promise<boolean> => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再新增支出");
+      return false;
+    }
     const res = addExpenseInState(appState, {
       ledgerId: activeLedger.id,
       ...payload,
@@ -237,7 +445,9 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return false;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return false;
+    }
     setFeedbackSuccess(
       `已儲存支出「${res.transaction?.title}」（${res.transaction?.amount} 元），各成員餘額已自動更新並發送通知`,
     );
@@ -245,11 +455,15 @@ export function SharedLedgerWorkspace() {
   };
 
   // User Story 8：修改與刪除群組支出
-  const handleUpdateExpense = (
+  const handleUpdateExpense = async (
     transactionId: string,
     payload: ExpenseSubmissionPayload,
-  ): boolean => {
+  ): Promise<boolean> => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再修改支出");
+      return false;
+    }
     const res = updateExpenseInState(appState, {
       ledgerId: activeLedger.id,
       transactionId,
@@ -259,15 +473,21 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return false;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return false;
+    }
     setFeedbackSuccess(
       `已更新支出「${res.transaction?.title}」，保留修改紀錄並重新計算各成員餘額`,
     );
     return true;
   };
 
-  const handleDeleteExpense = (transactionId: string) => {
+  const handleDeleteExpense = async (transactionId: string) => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再刪除支出");
+      return;
+    }
     const res = deleteExpenseInState(appState, {
       ledgerId: activeLedger.id,
       transactionId,
@@ -276,17 +496,23 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess("已刪除支出並重新計算各成員餘額");
   };
 
   // User Story 7：標記還款與確認收款
-  const handleCreateRepayment = (
+  const handleCreateRepayment = async (
     fromUid: string,
     toUid: string,
     amount: number,
   ) => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再標記還款");
+      return;
+    }
     const res = createRepaymentInState(appState, {
       ledgerId: activeLedger.id,
       fromUid,
@@ -297,12 +523,18 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess("已標記還款並通知收款人確認！");
   };
 
-  const handleConfirmRepayment = (repaymentId: string) => {
+  const handleConfirmRepayment = async (repaymentId: string) => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再確認還款");
+      return;
+    }
     const res = confirmRepaymentInState(appState, {
       ledgerId: activeLedger.id,
       repaymentId,
@@ -311,12 +543,14 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess("收款人已確認收款，雙方餘額已即時更新！");
   };
 
   // User Story 9：移除群組成員
-  const handleRemoveMember = (ledgerId: string, targetUid: string) => {
+  const handleRemoveMember = async (ledgerId: string, targetUid: string) => {
     clearFeedback();
     const res = removeMemberFromLedgerInState(appState, {
       ledgerId,
@@ -326,19 +560,32 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess("已將該成員移出群組並發送通知");
   };
 
   const ledgerNotifications = appState.notifications
-    .filter((n) => n.ledgerId === activeLedger.id)
+    .filter((n) => n.ledgerId === activeLedger?.id)
     .slice(0, 3);
+
+  if (firebaseMode && !firebaseReady) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-600">
+        正在連線至 Firebase…
+      </main>
+    );
+  }
+
+  const visibleTab: WorkspaceTab = activeLedger ? activeTab : "group";
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <AppHeader
         currentUser={currentUser}
         allUsers={allUsers}
+        firebaseMode={firebaseMode}
         authError={feedbackError}
         authSuccess={feedbackSuccess}
         onRegisterAccount={handleRegisterAccount}
@@ -356,15 +603,17 @@ export function SharedLedgerWorkspace() {
               <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700">
                 目前作用中帳本
               </span>
-              <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-                幣別：{activeLedger.currency}
-              </span>
+              {activeLedger && (
+                <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                  幣別：{activeLedger.currency}
+                </span>
+              )}
             </div>
             <h2
               data-testid="active-ledger-title"
               className="mt-1 text-2xl font-bold text-slate-900"
             >
-              {activeLedger.name}
+              {activeLedger?.name ?? "尚未加入群組"}
             </h2>
           </div>
 
@@ -372,39 +621,39 @@ export function SharedLedgerWorkspace() {
             aria-label="帳本功能導覽"
             className="flex flex-wrap items-center gap-2"
           >
-            <Button
+            {activeLedger && <Button
               type="button"
-              variant={activeTab === "expenses" ? "default" : "outline"}
+              variant={visibleTab === "expenses" ? "default" : "outline"}
               onClick={() => {
                 clearFeedback();
                 setActiveTab("expenses");
               }}
             >
               帳目與新增支出
-            </Button>
-            <Button
+            </Button>}
+            {activeLedger && <Button
               type="button"
-              variant={activeTab === "settlement" ? "default" : "outline"}
+              variant={visibleTab === "settlement" ? "default" : "outline"}
               onClick={() => {
                 clearFeedback();
                 setActiveTab("settlement");
               }}
             >
               結算
-            </Button>
-            <Button
+            </Button>}
+            {activeLedger && <Button
               type="button"
-              variant={activeTab === "statistics" ? "default" : "outline"}
+              variant={visibleTab === "statistics" ? "default" : "outline"}
               onClick={() => {
                 clearFeedback();
                 setActiveTab("statistics");
               }}
             >
               統計
-            </Button>
+            </Button>}
             <Button
               type="button"
-              variant={activeTab === "group" ? "default" : "outline"}
+              variant={visibleTab === "group" ? "default" : "outline"}
               onClick={() => {
                 clearFeedback();
                 setActiveTab("group");
@@ -427,7 +676,7 @@ export function SharedLedgerWorkspace() {
         )}
 
         {/* 功能內容區 */}
-        {activeTab === "expenses" && (
+        {activeLedger && visibleTab === "expenses" && (
           <TransactionPanel
             key={`${activeLedger.id}-${currentUserUid}`}
             ledger={activeLedger}
@@ -442,7 +691,7 @@ export function SharedLedgerWorkspace() {
           />
         )}
 
-        {activeTab === "settlement" && (
+        {activeLedger && visibleTab === "settlement" && (
           <SettlementAndStatsPanel
             key={`settlement-${activeLedger.id}-${currentUserUid}`}
             mode="settlement"
@@ -465,7 +714,7 @@ export function SharedLedgerWorkspace() {
           />
         )}
 
-        {activeTab === "statistics" && (
+        {activeLedger && visibleTab === "statistics" && (
           <SettlementAndStatsPanel
             mode="statistics"
             ledger={activeLedger}
@@ -487,10 +736,11 @@ export function SharedLedgerWorkspace() {
           />
         )}
 
-        {activeTab === "group" && (
+        {visibleTab === "group" && (
           <LedgerGroupPanel
             ledgers={userLedgers}
             activeLedger={activeLedger}
+            firebaseMode={firebaseMode}
             currentUserUid={currentUserUid}
             currentUserRole={currentUserRole}
             netBalances={netBalances}

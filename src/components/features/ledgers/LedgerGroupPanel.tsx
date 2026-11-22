@@ -21,17 +21,27 @@ import type { CurrencyCode, Ledger, LedgerRole } from "@/types/ledger";
 
 export interface LedgerGroupPanelProps {
   ledgers: Ledger[];
-  activeLedger: Ledger;
+  activeLedger: Ledger | null;
+  firebaseMode?: boolean;
   currentUserUid: string;
   currentUserRole: LedgerRole;
   netBalances: Record<string, number>;
   feedbackError?: string | null;
   feedbackSuccess?: string | null;
   onSelectLedger: (ledgerId: string) => void;
-  onCreateLedger: (name: string, currency: CurrencyCode) => void;
-  onJoinLedger: (inviteCodeOrUrl: string) => void;
-  onToggleInviteActive: (ledgerId: string, active: boolean) => void;
-  onRemoveMember: (ledgerId: string, targetUid: string) => void;
+  onCreateLedger: (
+    name: string,
+    currency: CurrencyCode,
+  ) => void | Promise<boolean>;
+  onJoinLedger: (inviteCodeOrUrl: string) => void | Promise<void>;
+  onToggleInviteActive: (
+    ledgerId: string,
+    active: boolean,
+  ) => void | Promise<void>;
+  onRemoveMember: (
+    ledgerId: string,
+    targetUid: string,
+  ) => void | Promise<void>;
 }
 
 const ROLE_LABELS: Record<LedgerRole, string> = {
@@ -44,6 +54,7 @@ const ROLE_LABELS: Record<LedgerRole, string> = {
 export function LedgerGroupPanel({
   ledgers,
   activeLedger,
+  firebaseMode = false,
   currentUserUid,
   currentUserRole,
   netBalances,
@@ -60,19 +71,25 @@ export function LedgerGroupPanel({
     React.useState<CurrencyCode>("TWD");
   const [inviteInput, setInviteInput] = React.useState("");
 
-  const inviteLink = `https://ai-language-model-intergrition.web.app/ledgers?invite=${activeLedger.invite.code}`;
+  const inviteLink = activeLedger
+    ? firebaseMode
+      ? `https://ai-language-model-intergrition.web.app/ledgers?${new URLSearchParams({
+          ledger: activeLedger.id,
+        }).toString()}`
+      : `https://ai-language-model-intergrition.web.app/ledgers?ledger=${activeLedger.id}&invite=${activeLedger.invite.code}`
+    : "";
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onCreateLedger(newGroupName, newGroupCurrency);
-    if (newGroupName.trim()) {
+    const created = await onCreateLedger(newGroupName, newGroupCurrency);
+    if (created && newGroupName.trim()) {
       setNewGroupName("");
     }
   };
 
-  const handleJoinSubmit = (e: React.FormEvent) => {
+  const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onJoinLedger(inviteInput);
+    await onJoinLedger(inviteInput);
   };
 
   return (
@@ -154,7 +171,9 @@ export function LedgerGroupPanel({
           <CardHeader>
             <CardTitle>透過邀請連結加入群組</CardTitle>
             <CardDescription>
-              輸入群組邀請連結或邀請碼（測試失效連結可輸入 EXPIRED2025）
+              {firebaseMode
+                ? "貼上群組管理者提供的完整邀請連結"
+                : "輸入群組邀請連結或邀請碼（測試失效連結可輸入 EXPIRED2025）"}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -164,14 +183,23 @@ export function LedgerGroupPanel({
                   htmlFor="invite-code-input"
                   className="mb-1 block text-xs font-medium text-slate-700"
                 >
-                  邀請連結或邀請碼
+                  {firebaseMode ? "邀請連結" : "邀請連結或邀請碼"}
                 </label>
                 <Input
                   id="invite-code-input"
-                  placeholder="貼上邀請連結或輸入邀請碼，如 HUALIEN2026"
+                  placeholder={
+                    firebaseMode
+                      ? "貼上完整邀請連結"
+                      : "貼上邀請連結或輸入邀請碼，如 HUALIEN2026"
+                  }
                   value={inviteInput}
                   onChange={(e) => setInviteInput(e.target.value)}
                 />
+                {firebaseMode && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    請貼上完整邀請連結；雲端模式不接受單獨的邀請碼。
+                  </p>
+                )}
               </div>
               <Button type="submit" variant="outline" className="w-full">
                 加入群組
@@ -182,7 +210,7 @@ export function LedgerGroupPanel({
       </div>
 
       {/* 目前帳本資訊、邀請連結與 QR Code、成員管理 */}
-      <Card>
+      {activeLedger && <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -230,12 +258,14 @@ export function LedgerGroupPanel({
                 >
                   {inviteLink}
                 </p>
-                <p className="text-xs text-slate-500">
-                  邀請碼：
-                  <strong data-testid="ledger-invite-code">
-                    {activeLedger.invite.code}
-                  </strong>
-                </p>
+                {!firebaseMode && (
+                  <p className="text-xs text-slate-500">
+                    邀請碼：
+                    <strong data-testid="ledger-invite-code">
+                      {activeLedger.invite.code}
+                    </strong>
+                  </p>
+                )}
                 {currentUserRole === "Owner" && (
                   <div className="pt-1">
                     <Button
@@ -258,7 +288,7 @@ export function LedgerGroupPanel({
               </div>
 
               {/* 內嵌 QR Code 視覺化元件 */}
-              <div
+              {!firebaseMode && <div
                 aria-label="群組邀請 QR Code"
                 className="flex flex-col items-center rounded-lg border border-slate-200 bg-white p-3 shadow-xs"
               >
@@ -289,8 +319,13 @@ export function LedgerGroupPanel({
                 <span className="mt-1 text-[11px] font-medium text-slate-600">
                   QR Code
                 </span>
-              </div>
+              </div>}
             </div>
+            {firebaseMode && (
+              <p className="mt-3 text-xs text-amber-800">
+                持有此連結的人可在邀請啟用期間加入為編輯者，請只分享給信任的組員。
+              </p>
+            )}
           </div>
 
           {/* User Story 9：管理群組成員 */}
@@ -363,7 +398,7 @@ export function LedgerGroupPanel({
             </div>
           </div>
         </CardContent>
-      </Card>
+      </Card>}
     </div>
   );
 }

@@ -22,7 +22,10 @@ import {
   validateExpenseInput,
   validateRepaymentAmount,
 } from "@/lib/finance";
-import { getFirebaseClientDb } from "@/lib/firebase/client";
+import {
+  getFirebaseClientDb,
+  isFirebaseEnabled,
+} from "@/lib/firebase/client";
 import {
   ledgerConverter,
   notificationConverter,
@@ -171,6 +174,17 @@ export interface AppDatabaseState {
   transactions: Record<string, Transaction[]>;
   repayments: Record<string, Repayment[]>;
   notifications: LedgerNotification[];
+}
+
+export function createEmptyAppState(): AppDatabaseState {
+  return {
+    users: {},
+    currentUserUid: null,
+    ledgers: {},
+    transactions: {},
+    repayments: {},
+    notifications: [],
+  };
 }
 
 const STORAGE_KEY = "tw_split_ledger_app_state_v1";
@@ -374,7 +388,7 @@ export function loadAppState(): AppDatabaseState {
 }
 
 export function saveAppState(state: AppDatabaseState): void {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || isFirebaseEnabled()) {
     return;
   }
   try {
@@ -599,6 +613,8 @@ export function createLedgerInState(
   params: {
     name: string;
     currency: CurrencyCode;
+    id?: string;
+    inviteCode?: string;
   },
 ): { nextState: AppDatabaseState; error?: string; ledger?: Ledger } {
   const currentUid = state.currentUserUid;
@@ -612,8 +628,10 @@ export function createLedgerInState(
 
   const creator = state.users[currentUid];
   const now = new Date().toISOString();
-  const ledgerId = `ledger-${Date.now()}`;
-  const inviteCode = `INV-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  const ledgerId = params.id ?? `ledger-${Date.now()}`;
+  const inviteCode =
+    params.inviteCode ??
+    `INV-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
   const newLedger: Ledger = {
     id: ledgerId,

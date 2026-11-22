@@ -38,8 +38,12 @@ export interface SettlementAndStatsPanelProps {
   feedbackError?: string | null;
   feedbackSuccess?: string | null;
   onChangeDateRange: (startDate: string, endDate: string) => void;
-  onCreateRepayment: (fromUid: string, toUid: string, amount: number) => void;
-  onConfirmRepayment: (repaymentId: string) => void;
+  onCreateRepayment: (
+    fromUid: string,
+    toUid: string,
+    amount: number,
+  ) => void | Promise<void>;
+  onConfirmRepayment: (repaymentId: string) => void | Promise<void>;
 }
 
 const CATEGORY_COLORS: Record<ExpenseCategory, string> = {

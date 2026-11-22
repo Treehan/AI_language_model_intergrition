@@ -13,22 +13,26 @@ import type { UserProfile } from "@/types/ledger";
 export interface AppHeaderProps {
   currentUser: UserProfile | null;
   allUsers: UserProfile[];
+  firebaseMode?: boolean;
   authError?: string | null;
   authSuccess?: string | null;
   onRegisterAccount: (params: {
     identifier: string;
     password: string;
     displayName: string;
-  }) => boolean;
-  onLoginAccount: (params: { identifier: string; password: string }) => boolean;
+  }) => boolean | Promise<boolean>;
+  onLoginAccount: (
+    params: { identifier: string; password: string },
+  ) => boolean | Promise<boolean>;
   onDeleteAccount: () => boolean;
   onSwitchUser: (uid: string) => void;
-  onLogout: () => void;
+  onLogout: () => void | Promise<void>;
 }
 
 export function AppHeader({
   currentUser,
   allUsers,
+  firebaseMode = false,
   authError,
   authSuccess,
   onRegisterAccount,
@@ -45,24 +49,30 @@ export function AppHeader({
   const [identifier, setIdentifier] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (authMode === "register") {
-      const ok = onRegisterAccount({ identifier, password, displayName });
-      if (ok) {
-        setIdentifier("");
-        setPassword("");
-        setDisplayName("");
-        setShowAuthModal(false);
+    setIsSubmitting(true);
+    try {
+      if (authMode === "register") {
+        const ok = await onRegisterAccount({ identifier, password, displayName });
+        if (ok) {
+          setIdentifier("");
+          setPassword("");
+          setDisplayName("");
+          setShowAuthModal(false);
+        }
+      } else {
+        const ok = await onLoginAccount({ identifier, password });
+        if (ok) {
+          setIdentifier("");
+          setPassword("");
+          setShowAuthModal(false);
+        }
       }
-    } else {
-      const ok = onLoginAccount({ identifier, password });
-      if (ok) {
-        setIdentifier("");
-        setPassword("");
-        setShowAuthModal(false);
-      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -98,7 +108,7 @@ export function AppHeader({
               </div>
 
               {/* 方便切換不同群組角色測試權限 */}
-              <select
+              {!firebaseMode && <select
                 aria-label="快速切換測試會員"
                 value={currentUser.uid}
                 onChange={(e) => onSwitchUser(e.target.value)}
@@ -109,7 +119,7 @@ export function AppHeader({
                     切換：{u.displayName} ({u.email})
                   </option>
                 ))}
-              </select>
+              </select>}
 
               <Button
                 type="button"
@@ -222,10 +232,18 @@ export function AppHeader({
                 </label>
                 <Input
                   id="auth-identifier-input"
+                  type={firebaseMode ? "email" : "text"}
+                  aria-label={firebaseMode ? "電子郵件" : undefined}
                   placeholder="例如：newuser@example.com 或 0912345678"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
+                  required
                 />
+                {firebaseMode && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Firebase 登入目前使用電子郵件與密碼。
+                  </p>
+                )}
               </div>
 
               <div>
@@ -241,6 +259,8 @@ export function AppHeader({
                   placeholder="請輸入密碼（至少 6 碼）"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
                 />
               </div>
 
@@ -257,17 +277,18 @@ export function AppHeader({
                     placeholder="請輸入您的顯示暱稱"
                     value={displayName}
                     onChange={(e) => setDisplayName(e.target.value)}
+                    required
                   />
                 </div>
               )}
 
-              <Button type="submit" className="w-full">
+              <Button type="submit" className="w-full" disabled={isSubmitting}>
                 {authMode === "register" ? "建立帳號" : "登入"}
               </Button>
             </form>
 
             {/* 刪除個人帳號區塊 */}
-            {currentUser && (
+            {currentUser && !firebaseMode && (
               <div className="mt-5 border-t border-slate-200 pt-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
