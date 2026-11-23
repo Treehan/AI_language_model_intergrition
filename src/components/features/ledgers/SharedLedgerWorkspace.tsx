@@ -37,6 +37,7 @@ import {
   addExpenseInState,
   type AppDatabaseState,
   confirmRepaymentInState,
+  createEmptyAppState,
   createLedgerInState,
   createRepaymentInState,
   deleteAccountInState,
@@ -48,6 +49,14 @@ import {
   toggleLedgerInviteInState,
   updateExpenseInState,
 } from "@/lib/ledgers";
+import { isFirebaseEnabled } from "@/lib/firebase/client";
+import {
+  createFirebaseDocumentId,
+  getOrCreateFirebaseUserProfile,
+  joinFirebaseLedgerByInvite,
+  persistAppStateChanges,
+  subscribeToFirebaseWorkspace,
+} from "@/lib/firebase/workspace";
 import {
   deleteCurrentAuthUser,
   getAuthErrorMessage,
@@ -108,8 +117,9 @@ const PAGE_DESCRIPTIONS: Record<WorkspaceTab, string> = {
 };
 
 export function SharedLedgerWorkspace() {
+  const firebaseMode = isFirebaseEnabled();
   const [appState, setAppState] = React.useState<AppDatabaseState>(() =>
-    loadAppState(),
+    firebaseMode ? createEmptyAppState() : loadAppState(),
   );
   const [authProfile, setAuthProfile] = React.useState<{
     uid: string;
@@ -139,21 +149,69 @@ export function SharedLedgerWorkspace() {
 
   const appStateRef = React.useRef(appState);
   appStateRef.current = appState;
+  const cloudUnsubscribeRef = React.useRef<(() => void) | null>(null);
+  const authGenerationRef = React.useRef(0);
 
   const applyAuthProfile = React.useCallback(
     (profile: AuthenticatedProfile | null) => {
+      const requestId = ++authGenerationRef.current;
+      cloudUnsubscribeRef.current?.();
+      cloudUnsubscribeRef.current = null;
       setAuthProfile(profile);
-      setAuthLoading(false);
       if (!profile) {
-        const signedOutState = {
-          ...appStateRef.current,
-          currentUserUid: null,
-        };
+        const signedOutState = firebaseMode
+          ? createEmptyAppState()
+          : { ...appStateRef.current, currentUserUid: null };
         appStateRef.current = signedOutState;
         setAppState(signedOutState);
+        setAuthLoading(false);
         return;
       }
 
+      if (firebaseMode) {
+        setAuthLoading(true);
+        void getOrCreateFirebaseUserProfile({
+          uid: profile.uid,
+          email: profile.email,
+          phone: profile.phone || undefined,
+          displayName: profile.displayName,
+        })
+          .then((userProfile) => {
+            if (requestId !== authGenerationRef.current) {
+              return;
+            }
+            cloudUnsubscribeRef.current = subscribeToFirebaseWorkspace(
+              profile.uid,
+              userProfile,
+              (nextState) => {
+                if (requestId !== authGenerationRef.current) {
+                  return;
+                }
+                appStateRef.current = nextState;
+                setAppState(nextState);
+                setAuthLoading(false);
+              },
+              (error) => {
+                if (requestId !== authGenerationRef.current) {
+                  return;
+                }
+                setFeedbackError(getAuthErrorMessage(error));
+                setAuthLoading(false);
+              },
+            );
+            setAuthLoading(false);
+          })
+          .catch((error: unknown) => {
+            if (requestId !== authGenerationRef.current) {
+              return;
+            }
+            setFeedbackError(getAuthErrorMessage(error));
+            setAuthLoading(false);
+          });
+        return;
+      }
+
+      setAuthLoading(false);
       const previous = appStateRef.current;
       let nextState: AppDatabaseState = {
         ...previous,
@@ -190,12 +248,18 @@ export function SharedLedgerWorkspace() {
       appStateRef.current = nextState;
       setAppState(nextState);
     },
-    [],
+    [firebaseMode],
   );
 
   React.useEffect(() => {
     try {
-      return subscribeToAuthState(applyAuthProfile);
+      const unsubscribeAuth = subscribeToAuthState(applyAuthProfile);
+      return () => {
+        authGenerationRef.current += 1;
+        cloudUnsubscribeRef.current?.();
+        cloudUnsubscribeRef.current = null;
+        unsubscribeAuth();
+      };
     } catch (error) {
       queueMicrotask(() => {
         setFeedbackError(getAuthErrorMessage(error));
@@ -224,18 +288,24 @@ export function SharedLedgerWorkspace() {
   const activeLedger =
     userLedgers.find((ledger) => ledger.id === activeLedgerId) ??
     userLedgers[0] ??
-    Object.values(appState.ledgers)[0]!;
+    Object.values(appState.ledgers)[0] ??
+    null;
 
   const currentUserUid = currentUser?.uid ?? "";
-  const currentUserRole =
-    activeLedger.roles[currentUserUid] ?? "Member";
+  const currentUserRole = activeLedger?.roles[currentUserUid] ?? "Member";
+  const selectedLedgerId = activeLedger?.id;
 
   const inviteFromUrl = React.useSyncExternalStore(
     (callback) => {
       window.addEventListener("popstate", callback);
       return () => window.removeEventListener("popstate", callback);
     },
-    () => new URLSearchParams(window.location.search).get("invite") ?? "",
+    () => {
+      const url = new URL(window.location.href);
+      return firebaseMode
+        ? url.searchParams.get("ledger") ?? ""
+        : url.searchParams.get("invite") ?? "";
+    },
     () => "",
   );
   const activeTab =
@@ -246,29 +316,53 @@ export function SharedLedgerWorkspace() {
   };
 
   const activeTransactions = React.useMemo(
-    () => appState.transactions[activeLedger.id] ?? [],
-    [appState.transactions, activeLedger.id],
+    () =>
+      selectedLedgerId
+        ? appState.transactions[selectedLedgerId] ?? []
+        : [],
+    [appState.transactions, selectedLedgerId],
   );
   const activeRepayments = React.useMemo(
-    () => appState.repayments[activeLedger.id] ?? [],
-    [appState.repayments, activeLedger.id],
+    () =>
+      selectedLedgerId
+        ? appState.repayments[selectedLedgerId] ?? []
+        : [],
+    [appState.repayments, selectedLedgerId],
   );
 
   // 呼叫 lib/finance 純函式計算淨額、最少轉帳建議與統計資料
   const netBalances = React.useMemo(
     () =>
       calculateNetBalances(
-        activeLedger.members,
+        activeLedger?.members ?? [],
         activeTransactions,
         activeRepayments,
       ),
-    [activeLedger.members, activeTransactions, activeRepayments],
+    [activeLedger?.members, activeTransactions, activeRepayments],
   );
 
   const suggestedTransfers = React.useMemo(
     () => simplifyDebts(netBalances),
     [netBalances],
   );
+
+  const persistNextState = async (
+    nextState: AppDatabaseState,
+  ): Promise<boolean> => {
+    try {
+      if (firebaseMode) {
+        await persistAppStateChanges(appStateRef.current, nextState);
+      } else {
+        saveAppState(nextState);
+      }
+      appStateRef.current = nextState;
+      setAppState(nextState);
+      return true;
+    } catch (error) {
+      setFeedbackError(getAuthErrorMessage(error));
+      return false;
+    }
+  };
 
   const statistics = React.useMemo(
     () =>
@@ -301,6 +395,12 @@ export function SharedLedgerWorkspace() {
 
   const handleDeleteAccount = async (): Promise<boolean> => {
     clearFeedback();
+    if (firebaseMode) {
+      setFeedbackError(
+        "Firebase 帳號刪除需先完成安全的群組資料處理，目前尚未開放",
+      );
+      return false;
+    }
     const res = deleteAccountInState(appState);
     if (res.error) {
       setFeedbackError(res.error);
@@ -319,23 +419,72 @@ export function SharedLedgerWorkspace() {
   };
 
   // User Story 2：建立記帳群組
-  const handleCreateLedger = (name: string, currency: CurrencyCode) => {
+  const handleCreateLedger = async (
+    name: string,
+    currency: CurrencyCode,
+  ): Promise<boolean> => {
     clearFeedback();
-    const res = createLedgerInState(appState, { name, currency });
+    const res = createLedgerInState(appState, {
+      name,
+      currency,
+      ...(firebaseMode
+        ? {
+            id: createFirebaseDocumentId("ledgers"),
+            inviteCode: `INV-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`,
+          }
+        : {}),
+    });
     if (res.error || !res.ledger) {
       setFeedbackError(res.error ?? "建立群組失敗");
-      return;
+      return false;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return false;
+    }
     setActiveLedgerId(res.ledger.id);
     setFeedbackSuccess(
       `已成功建立群組「${res.ledger.name}」，並產生專屬邀請連結與 QR Code！`,
     );
+    return true;
   };
 
   // User Story 3：透過邀請連結加入群組
-  const handleJoinLedger = (inviteCodeOrUrl: string) => {
+  const handleJoinLedger = async (inviteCodeOrUrl: string) => {
     clearFeedback();
+    if (firebaseMode) {
+      if (!authProfile) {
+        setFeedbackError("請先登入再加入群組");
+        return;
+      }
+      try {
+        const inviteUrl = new URL(inviteCodeOrUrl.trim(), window.location.origin);
+        const ledgerId = inviteUrl.searchParams.get("ledger");
+        if (!ledgerId) {
+          setFeedbackError("請貼上完整的群組邀請連結");
+          return;
+        }
+        await joinFirebaseLedgerByInvite({
+          ledgerId,
+          uid: authProfile.uid,
+          displayName: currentUser?.displayName ?? authProfile.displayName,
+          email: authProfile.email,
+        });
+        setActiveLedgerId(ledgerId);
+        setFeedbackSuccess("已成功加入群組！");
+      } catch (error) {
+        const code =
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "permission-denied";
+        setFeedbackError(
+          code
+            ? "此邀請連結已失效，請向群組管理者索取新連結"
+            : getAuthErrorMessage(error),
+        );
+      }
+      return;
+    }
     const res = joinLedgerByInviteInState(appState, inviteCodeOrUrl);
     if (res.error || !res.ledger) {
       setFeedbackError(res.error ?? "加入群組失敗");
@@ -346,20 +495,28 @@ export function SharedLedgerWorkspace() {
     setFeedbackSuccess(`已成功加入群組「${res.ledger.name}」！`);
   };
 
-  const handleToggleInvite = (ledgerId: string, active: boolean) => {
+  const handleToggleInvite = async (ledgerId: string, active: boolean) => {
     clearFeedback();
     const res = toggleLedgerInviteInState(appState, ledgerId, active);
     if (res.error) {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess(active ? "已重新啟用邀請連結" : "已關閉邀請連結");
   };
 
   // User Story 4 & 5：新增支出
-  const handleAddExpense = (payload: ExpenseSubmissionPayload): boolean => {
+  const handleAddExpense = async (
+    payload: ExpenseSubmissionPayload,
+  ): Promise<boolean> => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再新增支出");
+      return false;
+    }
     const res = addExpenseInState(appState, {
       ledgerId: activeLedger.id,
       ...payload,
@@ -368,7 +525,9 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return false;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return false;
+    }
     setFeedbackSuccess(
       `已儲存支出「${res.transaction?.title}」（${res.transaction?.amount} 元），各成員餘額已自動更新並發送通知`,
     );
@@ -376,11 +535,15 @@ export function SharedLedgerWorkspace() {
   };
 
   // User Story 8：修改與刪除群組支出
-  const handleUpdateExpense = (
+  const handleUpdateExpense = async (
     transactionId: string,
     payload: ExpenseSubmissionPayload,
-  ): boolean => {
+  ): Promise<boolean> => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再修改支出");
+      return false;
+    }
     const res = updateExpenseInState(appState, {
       ledgerId: activeLedger.id,
       transactionId,
@@ -390,15 +553,21 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return false;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return false;
+    }
     setFeedbackSuccess(
       `已更新支出「${res.transaction?.title}」，保留修改紀錄並重新計算各成員餘額`,
     );
     return true;
   };
 
-  const handleDeleteExpense = (transactionId: string) => {
+  const handleDeleteExpense = async (transactionId: string) => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再刪除支出");
+      return;
+    }
     const res = deleteExpenseInState(appState, {
       ledgerId: activeLedger.id,
       transactionId,
@@ -407,17 +576,23 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess("已刪除支出並重新計算各成員餘額");
   };
 
   // User Story 7：標記還款與確認收款
-  const handleCreateRepayment = (
+  const handleCreateRepayment = async (
     fromUid: string,
     toUid: string,
     amount: number,
   ) => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再標記還款");
+      return;
+    }
     const res = createRepaymentInState(appState, {
       ledgerId: activeLedger.id,
       fromUid,
@@ -428,12 +603,18 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess("已標記還款並通知收款人確認！");
   };
 
-  const handleConfirmRepayment = (repaymentId: string) => {
+  const handleConfirmRepayment = async (repaymentId: string) => {
     clearFeedback();
+    if (!activeLedger) {
+      setFeedbackError("請先建立或加入群組再確認還款");
+      return;
+    }
     const res = confirmRepaymentInState(appState, {
       ledgerId: activeLedger.id,
       repaymentId,
@@ -442,12 +623,14 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess("收款人已確認收款，雙方餘額已即時更新！");
   };
 
   // User Story 9：移除群組成員
-  const handleRemoveMember = (ledgerId: string, targetUid: string) => {
+  const handleRemoveMember = async (ledgerId: string, targetUid: string) => {
     clearFeedback();
     const res = removeMemberFromLedgerInState(appState, {
       ledgerId,
@@ -457,12 +640,14 @@ export function SharedLedgerWorkspace() {
       setFeedbackError(res.error);
       return;
     }
-    setAppState(res.nextState);
+    if (!(await persistNextState(res.nextState))) {
+      return;
+    }
     setFeedbackSuccess("已將該成員移出群組並發送通知");
   };
 
   const ledgerNotifications = appState.notifications
-    .filter((n) => n.ledgerId === activeLedger.id)
+    .filter((n) => n.ledgerId === activeLedger?.id)
     .slice(0, 3);
   const activePage =
     WORKSPACE_NAV.find((item) => item.id === activeTab) ?? WORKSPACE_NAV[0];
@@ -531,12 +716,32 @@ export function SharedLedgerWorkspace() {
     );
   }
 
-  if (userLedgers.length === 0) {
+  if (!activeLedger) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-900">
         {appHeader}
-        <main className="mx-auto max-w-6xl px-6 py-8 text-sm text-slate-600">
-          正在準備您的個人帳本…
+        <main className="mx-auto max-w-6xl space-y-6 px-6 py-8">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">尚未加入帳本</h1>
+            <p className="mt-1 text-sm text-slate-600">
+              建立新群組，或使用邀請連結加入現有群組。
+            </p>
+          </div>
+          <LedgerGroupPanel
+            ledgers={userLedgers}
+            activeLedger={null}
+            firebaseMode={firebaseMode}
+            currentUserUid={currentUserUid}
+            currentUserRole={currentUserRole}
+            netBalances={netBalances}
+            feedbackError={feedbackError}
+            feedbackSuccess={feedbackSuccess}
+            onSelectLedger={handleSelectLedger}
+            onCreateLedger={handleCreateLedger}
+            onJoinLedger={handleJoinLedger}
+            onToggleInviteActive={handleToggleInvite}
+            onRemoveMember={handleRemoveMember}
+          />
         </main>
       </div>
     );
@@ -966,6 +1171,7 @@ export function SharedLedgerWorkspace() {
             <LedgerGroupPanel
               ledgers={userLedgers}
               activeLedger={activeLedger}
+              firebaseMode={firebaseMode}
               currentUserUid={currentUserUid}
               currentUserRole={currentUserRole}
               netBalances={netBalances}

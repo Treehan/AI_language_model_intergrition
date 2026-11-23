@@ -17,6 +17,7 @@ export default defineConfig({
     reuseExistingServer: true,
     timeout: 120_000,
     env: {
+      NEXT_PUBLIC_FIREBASE_ENABLED: "false",
       NEXT_PUBLIC_ENABLE_TEST_AUTH: "true",
     },
   },

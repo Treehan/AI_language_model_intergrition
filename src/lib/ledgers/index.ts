@@ -173,6 +173,17 @@ export interface AppDatabaseState {
   notifications: LedgerNotification[];
 }
 
+export function createEmptyAppState(): AppDatabaseState {
+  return {
+    users: {},
+    currentUserUid: null,
+    ledgers: {},
+    transactions: {},
+    repayments: {},
+    notifications: [],
+  };
+}
+
 const STORAGE_KEY = "tw_split_ledger_app_state_v1";
 const CURRENCY_CODES: readonly CurrencyCode[] = [
   "TWD",
@@ -447,7 +458,10 @@ export function loadAppState(): AppDatabaseState {
 }
 
 export function saveAppState(state: AppDatabaseState): void {
-  if (typeof window === "undefined") {
+  if (
+    typeof window === "undefined" ||
+    process.env.NEXT_PUBLIC_FIREBASE_ENABLED === "true"
+  ) {
     return;
   }
   try {
@@ -578,6 +592,8 @@ export function createLedgerInState(
   params: {
     name: string;
     currency: CurrencyCode;
+    id?: string;
+    inviteCode?: string;
   },
 ): { nextState: AppDatabaseState; error?: string; ledger?: Ledger } {
   const currentUid = state.currentUserUid;
@@ -598,8 +614,10 @@ export function createLedgerInState(
     return { nextState: state, error: "群組名稱不可超過 100 個字" };
   }
 
-  const ledgerId = `ledger-${crypto.randomUUID()}`;
-  const inviteCode = `INV-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+  const ledgerId = params.id ?? `ledger-${crypto.randomUUID()}`;
+  const inviteCode =
+    params.inviteCode ??
+    `INV-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
   const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
 
   const newLedger: Ledger = {

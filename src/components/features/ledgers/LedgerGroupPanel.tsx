@@ -22,17 +22,27 @@ import type { CurrencyCode, Ledger, LedgerRole } from "@/types/ledger";
 
 export interface LedgerGroupPanelProps {
   ledgers: Ledger[];
-  activeLedger: Ledger;
+  activeLedger: Ledger | null;
+  firebaseMode?: boolean;
   currentUserUid: string;
   currentUserRole: LedgerRole;
   netBalances: Record<string, number>;
   feedbackError?: string | null;
   feedbackSuccess?: string | null;
   onSelectLedger: (ledgerId: string) => void;
-  onCreateLedger: (name: string, currency: CurrencyCode) => void;
-  onJoinLedger: (inviteCodeOrUrl: string) => void;
-  onToggleInviteActive: (ledgerId: string, active: boolean) => void;
-  onRemoveMember: (ledgerId: string, targetUid: string) => void;
+  onCreateLedger: (
+    name: string,
+    currency: CurrencyCode,
+  ) => void | Promise<boolean>;
+  onJoinLedger: (inviteCodeOrUrl: string) => void | Promise<void>;
+  onToggleInviteActive: (
+    ledgerId: string,
+    active: boolean,
+  ) => void | Promise<void>;
+  onRemoveMember: (
+    ledgerId: string,
+    targetUid: string,
+  ) => void | Promise<void>;
 }
 
 const ROLE_LABELS: Record<LedgerRole, string> = {
@@ -45,6 +55,7 @@ const ROLE_LABELS: Record<LedgerRole, string> = {
 export function LedgerGroupPanel({
   ledgers,
   activeLedger,
+  firebaseMode = false,
   currentUserUid,
   currentUserRole,
   netBalances,
@@ -72,23 +83,34 @@ export function LedgerGroupPanel({
   );
   const inviteFromUrl = React.useSyncExternalStore(
     subscribeToLocation,
-    () => new URLSearchParams(window.location.search).get("invite") ?? "",
+    () => {
+      const url = new URL(window.location.href);
+      return firebaseMode
+        ? url.searchParams.has("ledger")
+          ? url.href
+          : ""
+        : url.searchParams.get("invite") ?? "";
+    },
     () => "",
   );
   const inviteInputValue = inviteInput ?? inviteFromUrl;
-  const inviteLink = `${inviteOrigin}/ledgers?invite=${encodeURIComponent(activeLedger.invite.code)}`;
+  const inviteLink = activeLedger
+    ? firebaseMode
+      ? `${inviteOrigin}/ledgers?ledger=${encodeURIComponent(activeLedger.id)}`
+      : `${inviteOrigin}/ledgers?invite=${encodeURIComponent(activeLedger.invite.code)}`
+    : "";
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onCreateLedger(newGroupName, newGroupCurrency);
-    if (newGroupName.trim()) {
+    const created = await onCreateLedger(newGroupName, newGroupCurrency);
+    if (created && newGroupName.trim()) {
       setNewGroupName("");
     }
   };
 
-  const handleJoinSubmit = (e: React.FormEvent) => {
+  const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onJoinLedger(inviteInputValue);
+    await onJoinLedger(inviteInputValue);
   };
 
   return (
@@ -170,7 +192,9 @@ export function LedgerGroupPanel({
           <CardHeader>
             <CardTitle>透過邀請連結加入群組</CardTitle>
             <CardDescription>
-              輸入群組邀請連結或邀請碼（測試失效連結可輸入 EXPIRED2025）
+              {firebaseMode
+                ? "貼上群組管理者提供的完整邀請連結"
+                : "輸入群組邀請連結或邀請碼（測試失效連結可輸入 EXPIRED2025）"}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -180,11 +204,15 @@ export function LedgerGroupPanel({
                   htmlFor="invite-code-input"
                   className="mb-1 block text-xs font-medium text-slate-700"
                 >
-                  邀請連結或邀請碼
+                  {firebaseMode ? "邀請連結" : "邀請連結或邀請碼"}
                 </label>
                 <Input
                   id="invite-code-input"
-                  placeholder="貼上邀請連結或輸入邀請碼，如 HUALIEN2026"
+                  placeholder={
+                    firebaseMode
+                      ? "貼上完整邀請連結"
+                      : "貼上邀請連結或輸入邀請碼，如 HUALIEN2026"
+                  }
                   value={inviteInputValue}
                   onChange={(e) => setInviteInput(e.target.value)}
                 />
@@ -198,7 +226,7 @@ export function LedgerGroupPanel({
       </div>
 
       {/* 目前帳本資訊、邀請連結與 QR Code、成員管理 */}
-      <Card>
+      {activeLedger && <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -246,12 +274,14 @@ export function LedgerGroupPanel({
                 >
                   {inviteLink}
                 </p>
-                <p className="text-xs text-slate-500">
-                  邀請碼：
-                  <strong data-testid="ledger-invite-code">
-                    {activeLedger.invite.code}
-                  </strong>
-                </p>
+                {!firebaseMode && (
+                  <p className="text-xs text-slate-500">
+                    邀請碼：
+                    <strong data-testid="ledger-invite-code">
+                      {activeLedger.invite.code}
+                    </strong>
+                  </p>
+                )}
                 {currentUserRole === "Owner" && (
                   <div className="pt-1">
                     <Button
@@ -361,7 +391,7 @@ export function LedgerGroupPanel({
             </div>
           </div>
         </CardContent>
-      </Card>
+      </Card>}
     </div>
   );
 }

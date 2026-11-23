@@ -309,11 +309,15 @@ export function AppHeader({
                   htmlFor="auth-identifier-input"
                   className="mb-1 block text-xs font-medium text-slate-700"
                 >
-                  電子郵件或手機號碼
+                  {testAuthEnabled ? "電子郵件或手機號碼" : "電子郵件"}
                 </label>
                 <Input
                   id="auth-identifier-input"
-                  placeholder="例如：newuser@example.com 或 0912345678"
+                  placeholder={
+                    testAuthEnabled
+                      ? "例如：newuser@example.com 或 0912345678"
+                      : "例如：newuser@example.com"
+                  }
                   value={identifier}
                   autoComplete="username"
                   onChange={(e) => {

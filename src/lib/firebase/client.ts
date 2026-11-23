@@ -6,6 +6,10 @@ import { type FirebaseApp, getApp, getApps, initializeApp } from "firebase/app";
 import { type Auth, getAuth } from "firebase/auth";
 import { type Firestore, getFirestore } from "firebase/firestore";
 
+export function isFirebaseEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_FIREBASE_ENABLED === "true";
+}
+
 /**
  * 取得或初始化 Firebase Client App
  */

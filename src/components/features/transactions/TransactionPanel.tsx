@@ -42,12 +42,14 @@ export interface TransactionPanelProps {
   currentUserRole: LedgerRole;
   feedbackError?: string | null;
   feedbackSuccess?: string | null;
-  onAddExpense: (payload: ExpenseSubmissionPayload) => boolean;
+  onAddExpense: (
+    payload: ExpenseSubmissionPayload,
+  ) => boolean | Promise<boolean>;
   onUpdateExpense: (
     transactionId: string,
     payload: ExpenseSubmissionPayload,
-  ) => boolean;
-  onDeleteExpense: (transactionId: string) => void;
+  ) => boolean | Promise<boolean>;
+  onDeleteExpense: (transactionId: string) => void | Promise<void>;
 }
 
 const CATEGORIES: ExpenseCategory[] = [
@@ -120,7 +122,7 @@ export function TransactionPanel({
     setCustomSplitStrs({});
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const parsedAmount = amountStr.trim() === "" ? 0 : Number(amountStr.trim());
     const customSplits: Record<string, number> = {};
@@ -142,12 +144,12 @@ export function TransactionPanel({
     };
 
     if (editingTxId) {
-      const ok = onUpdateExpense(editingTxId, payload);
+      const ok = await onUpdateExpense(editingTxId, payload);
       if (ok) {
         handleCancelEdit();
       }
     } else {
-      const ok = onAddExpense(payload);
+      const ok = await onAddExpense(payload);
       if (ok) {
         setTitle("");
         setAmountStr("");
