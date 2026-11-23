@@ -208,7 +208,7 @@ service cloud.firestore {
 
       // 更新權限：
       // (A) 帳本管理者 (Owner) 可更新帳本設定與成員名單
-      // (B) 新成員透過有效邀請連結 (invite.active == true) 加入帳本成為 'Editor'，且不可修改既有帳本名稱與幣別
+      // (B) 新成員透過有效邀請連結 (invite.active == true) 加入帳本成為 'Member'，且不可修改既有帳本名稱與幣別
       allow update: if isAuthenticated() &&
                     isValidLedger(request.resource.data) &&
                     (
@@ -222,7 +222,7 @@ service cloud.firestore {
                         resource.data.invite.active == true &&
                         !(request.auth.uid in resource.data.members) &&
                         request.auth.uid in request.resource.data.members &&
-                        request.resource.data.roles[request.auth.uid] == 'Editor' &&
+                        request.resource.data.roles[request.auth.uid] == 'Member' &&
                         request.resource.data.name == resource.data.name &&
                         request.resource.data.currency == resource.data.currency
                       )

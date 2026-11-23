@@ -12,6 +12,7 @@ import {
   validateCustomSplit,
   validateExpenseInput,
   validateRepaymentAmount,
+  validateStatisticsDateRange,
 } from "../../src/lib/finance/index";
 
 describe("財務計算核心 (lib/finance) - 100% 覆蓋率與領域鐵律驗證", () => {
@@ -82,6 +83,17 @@ describe("財務計算核心 (lib/finance) - 100% 覆蓋率與領域鐵律驗證
           participants: ["u1", "u2"],
         }),
       ).toEqual({ valid: true });
+
+      expect(
+        validateExpenseInput({
+          title: "超大額",
+          amount: 1_000_000_000_001,
+          participants: ["u1"],
+        }),
+      ).toEqual({
+        valid: false,
+        error: "金額不可超過 1,000,000,000,000 元",
+      });
     });
   });
 
@@ -302,6 +314,18 @@ describe("財務計算核心 (lib/finance) - 100% 覆蓋率與領域鐵律驗證
         valid: false,
         error: "目前對該成員沒有待還款項",
       });
+
+      expect(
+        validateRepaymentAmount({
+          netBalances,
+          fromUid: "u3",
+          toUid: "u1",
+          amount: 1_000_000_000_001,
+        }),
+      ).toEqual({
+        valid: false,
+        error: "還款金額不可超過 1,000,000,000,000 元",
+      });
     });
   });
 
@@ -363,6 +387,33 @@ describe("財務計算核心 (lib/finance) - 100% 覆蓋率與領域鐵律驗證
   });
 
   describe("calculateExpenseStatistics & formatCurrencyInteger (User Story 10)", () => {
+    it("拒絕無效或反向的統計日期範圍", () => {
+      expect(validateStatisticsDateRange()).toEqual({ valid: true });
+      expect(
+        validateStatisticsDateRange("2026-11-01", "2026-11-30"),
+      ).toEqual({ valid: true });
+      expect(validateStatisticsDateRange("2026-2-01", "2026-11-30")).toEqual({
+        valid: false,
+        error: "請選擇有效的統計開始日期",
+      });
+      expect(validateStatisticsDateRange("2026-11-01", "2026-02-30")).toEqual({
+        valid: false,
+        error: "請選擇有效的統計結束日期",
+      });
+      expect(validateStatisticsDateRange("2026-12-01", "2026-11-30")).toEqual({
+        valid: false,
+        error: "統計開始日期不可晚於結束日期",
+      });
+      expect(() =>
+        calculateExpenseStatistics({
+          transactions: [],
+          userUid: "u1",
+          startDate: "2026-12-01",
+          endDate: "2026-11-30",
+        }),
+      ).toThrow("統計開始日期不可晚於結束日期");
+    });
+
     it("依時間範圍篩選並計算各類別百分比、群組總支出與個人分攤金額", () => {
       const transactions = [
         {

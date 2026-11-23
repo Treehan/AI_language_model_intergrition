@@ -6,6 +6,7 @@
  * 嚴禁在內部直接查詢 Firestore 或執行分帳運算。
  */
 import * as React from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,9 +59,24 @@ export function LedgerGroupPanel({
   const [newGroupName, setNewGroupName] = React.useState("");
   const [newGroupCurrency, setNewGroupCurrency] =
     React.useState<CurrencyCode>("TWD");
-  const [inviteInput, setInviteInput] = React.useState("");
+  const [inviteInput, setInviteInput] = React.useState<string | null>(null);
 
-  const inviteLink = `https://ai-language-model-intergrition.web.app/ledgers?invite=${activeLedger.invite.code}`;
+  const subscribeToLocation = React.useCallback((callback: () => void) => {
+    window.addEventListener("popstate", callback);
+    return () => window.removeEventListener("popstate", callback);
+  }, []);
+  const inviteOrigin = React.useSyncExternalStore(
+    subscribeToLocation,
+    () => window.location.origin,
+    () => "https://ai-language-model-intergrition.web.app",
+  );
+  const inviteFromUrl = React.useSyncExternalStore(
+    subscribeToLocation,
+    () => new URLSearchParams(window.location.search).get("invite") ?? "",
+    () => "",
+  );
+  const inviteInputValue = inviteInput ?? inviteFromUrl;
+  const inviteLink = `${inviteOrigin}/ledgers?invite=${encodeURIComponent(activeLedger.invite.code)}`;
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,7 +88,7 @@ export function LedgerGroupPanel({
 
   const handleJoinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onJoinLedger(inviteInput);
+    onJoinLedger(inviteInputValue);
   };
 
   return (
@@ -169,7 +185,7 @@ export function LedgerGroupPanel({
                 <Input
                   id="invite-code-input"
                   placeholder="貼上邀請連結或輸入邀請碼，如 HUALIEN2026"
-                  value={inviteInput}
+                  value={inviteInputValue}
                   onChange={(e) => setInviteInput(e.target.value)}
                 />
               </div>
@@ -262,30 +278,12 @@ export function LedgerGroupPanel({
                 aria-label="群組邀請 QR Code"
                 className="flex flex-col items-center rounded-lg border border-slate-200 bg-white p-3 shadow-xs"
               >
-                <svg
-                  width="88"
-                  height="88"
-                  viewBox="0 0 88 88"
-                  role="img"
-                  aria-label={`邀請碼 ${activeLedger.invite.code} QR Code`}
-                >
-                  <rect width="88" height="88" fill="#ffffff" />
-                  <rect x="8" y="8" width="24" height="24" fill="#0f172a" />
-                  <rect x="12" y="12" width="16" height="16" fill="#ffffff" />
-                  <rect x="16" y="16" width="8" height="8" fill="#0f172a" />
-                  <rect x="56" y="8" width="24" height="24" fill="#0f172a" />
-                  <rect x="60" y="12" width="16" height="16" fill="#ffffff" />
-                  <rect x="64" y="16" width="8" height="8" fill="#0f172a" />
-                  <rect x="8" y="56" width="24" height="24" fill="#0f172a" />
-                  <rect x="12" y="60" width="16" height="16" fill="#ffffff" />
-                  <rect x="16" y="64" width="8" height="8" fill="#0f172a" />
-                  <rect x="40" y="16" width="8" height="8" fill="#059669" />
-                  <rect x="40" y="32" width="8" height="16" fill="#0f172a" />
-                  <rect x="24" y="40" width="16" height="8" fill="#0f172a" />
-                  <rect x="56" y="44" width="16" height="8" fill="#059669" />
-                  <rect x="44" y="60" width="12" height="12" fill="#0f172a" />
-                  <rect x="64" y="64" width="16" height="16" fill="#0f172a" />
-                </svg>
+                <QRCodeSVG
+                  value={inviteLink}
+                  size={120}
+                  includeMargin
+                  title={`群組邀請連結 QR Code：${activeLedger.invite.code}`}
+                />
                 <span className="mt-1 text-[11px] font-medium text-slate-600">
                   QR Code
                 </span>
