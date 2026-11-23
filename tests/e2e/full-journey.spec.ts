@@ -21,8 +21,17 @@ test.describe("小組記帳與分帳 App - 端對端全功能流程驗證 (End-t
     // -------------------------------------------------------------------------
     await page.getByRole("button", { name: "帳號管理 / 建立帳號" }).click();
 
+    // 2.0 檢查手機號碼阻擋（僅支援電子郵件）
+    await page.getByLabel("電子郵件").fill("0912345678");
+    await page.getByLabel("密碼").fill("password123");
+    await page.getByLabel("暱稱").fill("手機用戶");
+    await page.getByRole("button", { name: "建立帳號", exact: true }).click();
+    await expect(
+      page.getByText("僅支援電子郵件，不支援使用手機號碼登入或註冊").first(),
+    ).toBeVisible();
+
     // 2.1 檢查已存在帳號阻擋
-    await page.getByLabel("電子郵件或手機號碼").fill("alice@example.com");
+    await page.getByLabel("電子郵件").fill("alice@example.com");
     await page.getByLabel("密碼").fill("password123");
     await page.getByLabel("暱稱").fill("小美重複");
     await page.getByRole("button", { name: "建立帳號", exact: true }).click();
@@ -31,7 +40,7 @@ test.describe("小組記帳與分帳 App - 端對端全功能流程驗證 (End-t
     ).toBeVisible();
 
     // 2.2 成功註冊新會員「李小華」
-    await page.getByLabel("電子郵件或手機號碼").fill("hua@example.com");
+    await page.getByLabel("電子郵件").fill("hua@example.com");
     await page.getByLabel("密碼").fill("securePass888");
     await page.getByLabel("暱稱").fill("李小華");
     await page.getByRole("button", { name: "建立帳號", exact: true }).click();

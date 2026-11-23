@@ -9,14 +9,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  confirmPhoneVerificationCode,
-  createPhoneRecaptchaVerifier,
   getAuthErrorMessage,
   isTestAuthEnabledForUi,
   loginEmailAccount,
-  normalizeTaiwanPhoneNumber,
   registerEmailAccount,
-  sendPhoneVerificationCode,
+  validateEmailOnly,
   type AuthenticatedProfile,
 } from "@/lib/firebase/auth";
 import type { UserProfile } from "@/types/ledger";
@@ -49,11 +46,9 @@ export function AppHeader({
   const [authMode, setAuthMode] = React.useState<"register" | "login">(
     "register",
   );
-  const [identifier, setIdentifier] = React.useState("");
+  const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [displayName, setDisplayName] = React.useState("");
-  const [phoneCode, setPhoneCode] = React.useState("");
-  const [phoneCodeSent, setPhoneCodeSent] = React.useState(false);
   const [localAuthError, setLocalAuthError] = React.useState<string | null>(
     null,
   );
@@ -61,28 +56,12 @@ export function AppHeader({
     null,
   );
   const [submitting, setSubmitting] = React.useState(false);
-  const phoneVerifier = React.useRef<ReturnType<
-    typeof createPhoneRecaptchaVerifier
-  > | null>(null);
-
-  const isPhoneIdentifier =
-    identifier.trim().length > 0 &&
-    !identifier.includes("@") &&
-    /^[+\d()\s-]+$/.test(identifier);
-
-  const resetPhoneVerification = () => {
-    phoneVerifier.current?.clear();
-    phoneVerifier.current = null;
-    setPhoneCode("");
-    setPhoneCodeSent(false);
-  };
 
   const changeAuthMode = (mode: "register" | "login") => {
     setAuthMode(mode);
     setLocalAuthError(null);
     setLocalAuthSuccess(null);
     setConfirmingDelete(false);
-    resetPhoneVerification();
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -91,48 +70,22 @@ export function AppHeader({
     setLocalAuthSuccess(null);
     setSubmitting(true);
     try {
-      if (isPhoneIdentifier) {
-        if (authMode === "register" && !displayName.trim()) {
-          throw new Error("請輸入暱稱");
-        }
-        const phoneNumber = normalizeTaiwanPhoneNumber(identifier);
-        if (!phoneCodeSent) {
-          phoneVerifier.current?.clear();
-          phoneVerifier.current = createPhoneRecaptchaVerifier(
-            "phone-recaptcha-container",
-          );
-          await sendPhoneVerificationCode(
-            phoneNumber,
-            phoneVerifier.current,
-          );
-          setPhoneCodeSent(true);
-          setLocalAuthSuccess("已傳送簡訊驗證碼，請輸入收到的 6 位數驗證碼");
-          return;
-        }
-        const profile = await confirmPhoneVerificationCode({
-          code: phoneCode,
-          displayName: authMode === "register" ? displayName : undefined,
+      const trimmedEmail = email.trim();
+      validateEmailOnly(trimmedEmail);
+
+      if (authMode === "register") {
+        await registerEmailAccount({
+          email: trimmedEmail,
+          password,
+          displayName,
         });
-        onAuthProfileChanged(profile);
-        setLocalAuthSuccess(
-          authMode === "register"
-            ? `歡迎 ${displayName.trim()}！已完成手機驗證並登入`
-            : "手機驗證成功，已登入",
-        );
-        resetPhoneVerification();
-        setIdentifier("");
-        setPhoneCode("");
-        setDisplayName("");
-        setShowAuthModal(false);
-      } else if (authMode === "register") {
-        await registerEmailAccount({ email: identifier, password, displayName });
         setLocalAuthSuccess(
           isTestAuthEnabledForUi()
             ? `歡迎 ${displayName.trim()}！已成功建立帳號並登入`
             : "驗證信已寄出，請先完成電子郵件驗證，再返回登入。",
         );
         if (isTestAuthEnabledForUi()) {
-          setIdentifier("");
+          setEmail("");
           setPassword("");
           setDisplayName("");
           setShowAuthModal(false);
@@ -140,9 +93,9 @@ export function AppHeader({
           setPassword("");
         }
       } else {
-        await loginEmailAccount({ email: identifier, password });
+        await loginEmailAccount({ email: trimmedEmail, password });
         setLocalAuthSuccess("登入成功");
-        setIdentifier("");
+        setEmail("");
         setPassword("");
         setShowAuthModal(false);
       }
@@ -303,130 +256,71 @@ export function AppHeader({
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-3">
+            <form noValidate onSubmit={handleSubmit} className="space-y-3">
               <div>
                 <label
-                  htmlFor="auth-identifier-input"
+                  htmlFor="auth-email-input"
                   className="mb-1 block text-xs font-medium text-slate-700"
                 >
-                  {testAuthEnabled ? "電子郵件或手機號碼" : "電子郵件"}
+                  電子郵件
                 </label>
                 <Input
-                  id="auth-identifier-input"
-                  placeholder={
-                    testAuthEnabled
-                      ? "例如：newuser@example.com 或 0912345678"
-                      : "例如：newuser@example.com"
-                  }
-                  value={identifier}
-                  autoComplete="username"
+                  id="auth-email-input"
+                  type="email"
+                  placeholder="例如：newuser@example.com"
+                  value={email}
+                  autoComplete="email"
                   onChange={(e) => {
-                    if (phoneCodeSent) {
-                      resetPhoneVerification();
-                    }
                     setLocalAuthError(null);
-                    setIdentifier(e.target.value);
+                    setEmail(e.target.value);
                   }}
                 />
               </div>
 
-              {isPhoneIdentifier ? (
-                <>
-                  {authMode === "register" && (
-                    <div>
-                      <label
-                        htmlFor="auth-nickname-input"
-                        className="mb-1 block text-xs font-medium text-slate-700"
-                      >
-                        暱稱
-                      </label>
-                      <Input
-                        id="auth-nickname-input"
-                        placeholder="請輸入您的顯示暱稱"
-                        value={displayName}
-                        onChange={(e) => setDisplayName(e.target.value)}
-                      />
-                    </div>
-                  )}
-                  {phoneCodeSent && (
-                    <div>
-                      <label
-                        htmlFor="auth-phone-code-input"
-                        className="mb-1 block text-xs font-medium text-slate-700"
-                      >
-                        簡訊驗證碼
-                      </label>
-                      <Input
-                        id="auth-phone-code-input"
-                        inputMode="numeric"
-                        autoComplete="one-time-code"
-                        maxLength={6}
-                        value={phoneCode}
-                        onChange={(e) =>
-                          setPhoneCode(e.target.value.replace(/\D/g, ""))
-                        }
-                      />
-                    </div>
-                  )}
-                  <p className="text-xs text-slate-500">
-                    手機登入使用 Firebase 簡訊驗證；Firebase 手機登入不支援密碼。
-                  </p>
-                  <div id="phone-recaptcha-container" />
-                </>
-              ) : (
-                <>
-                  <div>
-                    <label
-                      htmlFor="auth-password-input"
-                      className="mb-1 block text-xs font-medium text-slate-700"
-                    >
-                      密碼
-                    </label>
-                    <Input
-                      id="auth-password-input"
-                      type="password"
-                      autoComplete={
-                        authMode === "register"
-                          ? "new-password"
-                          : "current-password"
-                      }
-                      placeholder="請輸入密碼（至少 6 碼）"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                    />
-                  </div>
+              <div>
+                <label
+                  htmlFor="auth-password-input"
+                  className="mb-1 block text-xs font-medium text-slate-700"
+                >
+                  密碼
+                </label>
+                <Input
+                  id="auth-password-input"
+                  type="password"
+                  autoComplete={
+                    authMode === "register"
+                      ? "new-password"
+                      : "current-password"
+                  }
+                  placeholder="請輸入密碼（至少 6 碼）"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
 
-                  {authMode === "register" && (
-                    <div>
-                      <label
-                        htmlFor="auth-nickname-input"
-                        className="mb-1 block text-xs font-medium text-slate-700"
-                      >
-                        暱稱
-                      </label>
-                      <Input
-                        id="auth-nickname-input"
-                        placeholder="請輸入您的顯示暱稱"
-                        value={displayName}
-                        onChange={(e) => setDisplayName(e.target.value)}
-                      />
-                    </div>
-                  )}
-                </>
+              {authMode === "register" && (
+                <div>
+                  <label
+                    htmlFor="auth-nickname-input"
+                    className="mb-1 block text-xs font-medium text-slate-700"
+                  >
+                    暱稱
+                  </label>
+                  <Input
+                    id="auth-nickname-input"
+                    placeholder="請輸入您的顯示暱稱"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                  />
+                </div>
               )}
 
               <Button type="submit" className="w-full" disabled={submitting}>
                 {submitting
                   ? "處理中…"
-                  : isPhoneIdentifier
-                    ? phoneCodeSent
-                      ? authMode === "register"
-                        ? "驗證並建立帳號"
-                        : "驗證並登入"
-                      : "傳送驗證碼"
-                    : authMode === "register"
-                      ? "建立帳號"
-                      : "登入"}
+                  : authMode === "register"
+                    ? "建立帳號"
+                    : "登入"}
               </Button>
             </form>
 

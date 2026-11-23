@@ -7,6 +7,7 @@ import {
   registerEmailAccount,
   subscribeToAuthState,
   switchTestAuthUser,
+  validateEmailOnly,
 } from "../../src/lib/firebase/auth";
 
 describe("Firebase Authentication boundary", () => {
@@ -66,5 +67,32 @@ describe("Firebase Authentication boundary", () => {
     expect(getAuthErrorMessage(new Error("Firebase 尚未完成設定"))).toBe(
       "Firebase 尚未完成設定",
     );
+  });
+
+  it("rejects phone numbers and invalid email inputs for registration and login", async () => {
+    expect(() => validateEmailOnly("0912345678")).toThrow(
+      "僅支援電子郵件，不支援使用手機號碼登入或註冊",
+    );
+    expect(() => validateEmailOnly("+886912345678")).toThrow(
+      "僅支援電子郵件，不支援使用手機號碼登入或註冊",
+    );
+    expect(() => validateEmailOnly("not-an-email")).toThrow(
+      "請輸入有效的電子郵件地址",
+    );
+
+    await expect(
+      registerEmailAccount({
+        email: "0912345678",
+        password: "secret-password",
+        displayName: "手機用戶",
+      }),
+    ).rejects.toThrow("僅支援電子郵件，不支援使用手機號碼登入或註冊");
+
+    await expect(
+      loginEmailAccount({
+        email: "0912345678",
+        password: "secret-password",
+      }),
+    ).rejects.toThrow("僅支援電子郵件，不支援使用手機號碼登入或註冊");
   });
 });

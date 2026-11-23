@@ -93,6 +93,16 @@ export function subscribeToAuthState(
   });
 }
 
+export function validateEmailOnly(input: string): void {
+  const trimmed = input.trim();
+  if (/^[+\d()\s-]+$/.test(trimmed) || /^09\d+/.test(trimmed)) {
+    throw new Error("僅支援電子郵件，不支援使用手機號碼登入或註冊");
+  }
+  if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    throw new Error("請輸入有效的電子郵件地址");
+  }
+}
+
 export async function registerEmailAccount(params: {
   email: string;
   password: string;
@@ -100,9 +110,7 @@ export async function registerEmailAccount(params: {
 }): Promise<void> {
   const email = params.email.trim().toLowerCase();
   const displayName = params.displayName.trim();
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new Error("請輸入有效的電子郵件地址");
-  }
+  validateEmailOnly(email);
   if (params.password.length < 6) {
     throw new Error("請輸入至少 6 碼的密碼");
   }
@@ -149,6 +157,7 @@ export async function loginEmailAccount(params: {
   if (!email || !params.password) {
     throw new Error("請輸入電子郵件與密碼");
   }
+  validateEmailOnly(email);
 
   if (isTestAuthEnabled) {
     const profile = Object.values(testProfiles).find(

@@ -18,8 +18,17 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
 
     await page.getByRole("button", { name: "帳號管理 / 建立帳號" }).click();
 
+    // Scenario 0: 手機號碼註冊阻擋（僅限電子郵件）
+    await page.getByLabel("電子郵件").fill("0912345678");
+    await page.getByLabel("密碼").fill("password123");
+    await page.getByLabel("暱稱").fill("手機用戶");
+    await page.getByRole("button", { name: "建立帳號", exact: true }).click();
+    await expect(
+      page.getByText("僅支援電子郵件，不支援使用手機號碼登入或註冊").first(),
+    ).toBeVisible();
+
     // Scenario 2: 帳號已存在
-    await page.getByLabel("電子郵件或手機號碼").fill("alice@example.com");
+    await page.getByLabel("電子郵件").fill("alice@example.com");
     await page.getByLabel("密碼").fill("password123");
     await page.getByLabel("暱稱").fill("重複測試");
     await page.getByRole("button", { name: "建立帳號", exact: true }).click();
@@ -28,7 +37,7 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
     ).toBeVisible();
 
     // Scenario 1: 成功建立帳號並直接進入已登入狀態
-    await page.getByLabel("電子郵件或手機號碼").fill("newmember@example.com");
+    await page.getByLabel("電子郵件").fill("newmember@example.com");
     await page.getByLabel("密碼").fill("password123");
     await page.getByLabel("暱稱").fill("黃小華");
     await page.getByRole("button", { name: "建立帳號", exact: true }).click();
