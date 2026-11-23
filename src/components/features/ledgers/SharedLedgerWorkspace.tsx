@@ -19,7 +19,11 @@ import {
   ArrowUpRight,
   ChartPie,
   Clock3,
+  HardDrive,
   LayoutDashboard,
+  MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   ReceiptText,
   UsersRound,
@@ -42,7 +46,7 @@ import {
   deleteAccountInState,
   deleteExpenseInState,
   joinLedgerByInviteInState,
-  loadAppState,
+  loadAppStateWithStatus,
   removeMemberFromLedgerInState,
   saveAppState,
   toggleLedgerInviteInState,
@@ -108,8 +112,12 @@ const PAGE_DESCRIPTIONS: Record<WorkspaceTab, string> = {
 };
 
 export function SharedLedgerWorkspace() {
-  const [appState, setAppState] = React.useState<AppDatabaseState>(() =>
-    loadAppState(),
+  const [appLoadResult] = React.useState(loadAppStateWithStatus);
+  const [appState, setAppState] = React.useState<AppDatabaseState>(
+    appLoadResult.state,
+  );
+  const [storageError, setStorageError] = React.useState<string | null>(
+    appLoadResult.error ?? null,
   );
   const [authProfile, setAuthProfile] = React.useState<{
     uid: string;
@@ -123,6 +131,10 @@ export function SharedLedgerWorkspace() {
   );
   const [activeTabState, setActiveTabState] =
     React.useState<WorkspaceTab>("overview");
+  const [isWorkspaceNavCollapsed, setIsWorkspaceNavCollapsed] =
+    React.useState(false);
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = React.useState(false);
+  const [isExpenseFormOpen, setIsExpenseFormOpen] = React.useState(false);
   const [tabSelectedByUser, setTabSelectedByUser] = React.useState(false);
   const [feedbackError, setFeedbackError] = React.useState<string | null>(null);
   const [feedbackSuccess, setFeedbackSuccess] = React.useState<string | null>(
@@ -136,6 +148,27 @@ export function SharedLedgerWorkspace() {
     setFeedbackError(null);
     setFeedbackSuccess(null);
   };
+
+  const runStateMutation = React.useCallback(
+    <T,>(operation: () => T): T | undefined => {
+      if (storageError) {
+        setFeedbackError(storageError);
+        return undefined;
+      }
+      try {
+        return operation();
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "無法儲存本機帳本資料，請檢查瀏覽器儲存空間設定";
+        setStorageError(message);
+        setFeedbackError(message);
+        return undefined;
+      }
+    },
+    [storageError],
+  );
 
   const appStateRef = React.useRef(appState);
   appStateRef.current = appState;
@@ -175,14 +208,14 @@ export function SharedLedgerWorkspace() {
       if (!Object.values(nextState.ledgers).some((ledger) =>
         ledger.members.includes(profile.uid),
       )) {
-        const result = createLedgerInState(nextState, {
+        const result = runStateMutation(() => createLedgerInState(nextState, {
           name: "我的個人帳本",
           currency: "TWD",
-        });
-        if (result.ledger) {
+        }));
+        if (result?.ledger) {
           nextState = result.nextState;
           setActiveLedgerId(result.ledger.id);
-        } else if (result.error) {
+        } else if (result?.error) {
           setFeedbackError(result.error);
         }
       }
@@ -190,7 +223,7 @@ export function SharedLedgerWorkspace() {
       appStateRef.current = nextState;
       setAppState(nextState);
     },
-    [],
+    [runStateMutation],
   );
 
   React.useEffect(() => {
@@ -243,6 +276,14 @@ export function SharedLedgerWorkspace() {
   const selectTab = (tab: WorkspaceTab) => {
     setTabSelectedByUser(true);
     setActiveTabState(tab);
+    setIsMoreMenuOpen(false);
+    if (tab !== "expenses") {
+      setIsExpenseFormOpen(false);
+    }
+  };
+  const openExpenseForm = () => {
+    setIsExpenseFormOpen(true);
+    selectTab("expenses");
   };
 
   const activeTransactions = React.useMemo(
@@ -321,7 +362,12 @@ export function SharedLedgerWorkspace() {
   // User Story 2：建立記帳群組
   const handleCreateLedger = (name: string, currency: CurrencyCode) => {
     clearFeedback();
-    const res = createLedgerInState(appState, { name, currency });
+    const res = runStateMutation(() =>
+      createLedgerInState(appState, { name, currency }),
+    );
+    if (!res) {
+      return;
+    }
     if (res.error || !res.ledger) {
       setFeedbackError(res.error ?? "建立群組失敗");
       return;
@@ -336,7 +382,12 @@ export function SharedLedgerWorkspace() {
   // User Story 3：透過邀請連結加入群組
   const handleJoinLedger = (inviteCodeOrUrl: string) => {
     clearFeedback();
-    const res = joinLedgerByInviteInState(appState, inviteCodeOrUrl);
+    const res = runStateMutation(() =>
+      joinLedgerByInviteInState(appState, inviteCodeOrUrl),
+    );
+    if (!res) {
+      return;
+    }
     if (res.error || !res.ledger) {
       setFeedbackError(res.error ?? "加入群組失敗");
       return;
@@ -348,7 +399,12 @@ export function SharedLedgerWorkspace() {
 
   const handleToggleInvite = (ledgerId: string, active: boolean) => {
     clearFeedback();
-    const res = toggleLedgerInviteInState(appState, ledgerId, active);
+    const res = runStateMutation(() =>
+      toggleLedgerInviteInState(appState, ledgerId, active),
+    );
+    if (!res) {
+      return;
+    }
     if (res.error) {
       setFeedbackError(res.error);
       return;
@@ -360,10 +416,15 @@ export function SharedLedgerWorkspace() {
   // User Story 4 & 5：新增支出
   const handleAddExpense = (payload: ExpenseSubmissionPayload): boolean => {
     clearFeedback();
-    const res = addExpenseInState(appState, {
-      ledgerId: activeLedger.id,
-      ...payload,
-    });
+    const res = runStateMutation(() =>
+      addExpenseInState(appState, {
+        ledgerId: activeLedger.id,
+        ...payload,
+      }),
+    );
+    if (!res) {
+      return false;
+    }
     if (res.error) {
       setFeedbackError(res.error);
       return false;
@@ -381,11 +442,16 @@ export function SharedLedgerWorkspace() {
     payload: ExpenseSubmissionPayload,
   ): boolean => {
     clearFeedback();
-    const res = updateExpenseInState(appState, {
-      ledgerId: activeLedger.id,
-      transactionId,
-      ...payload,
-    });
+    const res = runStateMutation(() =>
+      updateExpenseInState(appState, {
+        ledgerId: activeLedger.id,
+        transactionId,
+        ...payload,
+      }),
+    );
+    if (!res) {
+      return false;
+    }
     if (res.error) {
       setFeedbackError(res.error);
       return false;
@@ -399,10 +465,15 @@ export function SharedLedgerWorkspace() {
 
   const handleDeleteExpense = (transactionId: string) => {
     clearFeedback();
-    const res = deleteExpenseInState(appState, {
-      ledgerId: activeLedger.id,
-      transactionId,
-    });
+    const res = runStateMutation(() =>
+      deleteExpenseInState(appState, {
+        ledgerId: activeLedger.id,
+        transactionId,
+      }),
+    );
+    if (!res) {
+      return;
+    }
     if (res.error) {
       setFeedbackError(res.error);
       return;
@@ -418,12 +489,17 @@ export function SharedLedgerWorkspace() {
     amount: number,
   ) => {
     clearFeedback();
-    const res = createRepaymentInState(appState, {
-      ledgerId: activeLedger.id,
-      fromUid,
-      toUid,
-      amount,
-    });
+    const res = runStateMutation(() =>
+      createRepaymentInState(appState, {
+        ledgerId: activeLedger.id,
+        fromUid,
+        toUid,
+        amount,
+      }),
+    );
+    if (!res) {
+      return;
+    }
     if (res.error) {
       setFeedbackError(res.error);
       return;
@@ -434,10 +510,15 @@ export function SharedLedgerWorkspace() {
 
   const handleConfirmRepayment = (repaymentId: string) => {
     clearFeedback();
-    const res = confirmRepaymentInState(appState, {
-      ledgerId: activeLedger.id,
-      repaymentId,
-    });
+    const res = runStateMutation(() =>
+      confirmRepaymentInState(appState, {
+        ledgerId: activeLedger.id,
+        repaymentId,
+      }),
+    );
+    if (!res) {
+      return;
+    }
     if (res.error) {
       setFeedbackError(res.error);
       return;
@@ -449,10 +530,15 @@ export function SharedLedgerWorkspace() {
   // User Story 9：移除群組成員
   const handleRemoveMember = (ledgerId: string, targetUid: string) => {
     clearFeedback();
-    const res = removeMemberFromLedgerInState(appState, {
-      ledgerId,
-      targetUid,
-    });
+    const res = runStateMutation(() =>
+      removeMemberFromLedgerInState(appState, {
+        ledgerId,
+        targetUid,
+      }),
+    );
+    if (!res) {
+      return;
+    }
     if (res.error) {
       setFeedbackError(res.error);
       return;
@@ -546,44 +632,73 @@ export function SharedLedgerWorkspace() {
     <div className="min-h-screen bg-[#f5f7f6] text-slate-900">
       {appHeader}
 
-      <main className="mx-auto grid max-w-screen-2xl gap-5 px-4 py-5 sm:px-6 lg:grid-cols-[248px_minmax(0,1fr)] lg:gap-7 lg:px-8 lg:py-8">
-        <aside className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <label
-              htmlFor="workspace-ledger-select"
-              className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500"
-            >
-              目前帳本
-            </label>
-            <select
-              id="workspace-ledger-select"
-              aria-label="切換帳本"
-              value={activeLedger.id}
-              onChange={(event) => handleSelectLedger(event.target.value)}
-              className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100"
-            >
-              {userLedgers.map((ledger) => (
-                <option key={ledger.id} value={ledger.id}>
-                  {ledger.name}
-                </option>
-              ))}
-            </select>
-            <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-xs">
-              <span className="text-slate-500">帳本幣別</span>
-              <span className="rounded-full bg-emerald-50 px-2.5 py-1 font-semibold text-emerald-800">
-                {activeLedger.currency}
-              </span>
-            </div>
-          </section>
-
+      <main
+        className={`mx-auto grid max-w-screen-2xl gap-5 px-4 pb-24 pt-5 transition-[grid-template-columns] duration-200 sm:px-6 lg:gap-7 lg:px-8 lg:py-8 ${
+          isWorkspaceNavCollapsed
+            ? "lg:grid-cols-[76px_minmax(0,1fr)]"
+            : "lg:grid-cols-[248px_minmax(0,1fr)]"
+        }`}
+      >
+        <aside className="hidden space-y-4 lg:sticky lg:top-6 lg:block lg:self-start">
           <nav
             aria-label="主要功能導覽"
             className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm"
           >
-            <h2 className="px-3 pb-2 pt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              工作區
-            </h2>
-            <div className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-1">
+            <div
+              className={`mb-2 flex items-center ${
+                isWorkspaceNavCollapsed
+                  ? "justify-center"
+                  : "justify-between px-3"
+              }`}
+            >
+              {!isWorkspaceNavCollapsed && (
+                <h2
+                  id="ledger-navigation-heading"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  帳本功能
+                </h2>
+              )}
+              <button
+                type="button"
+                data-testid="workspace-navigation-toggle"
+                aria-label={
+                  isWorkspaceNavCollapsed
+                    ? "展開側邊導覽"
+                    : "收合側邊導覽"
+                }
+                aria-controls="workspace-navigation-items"
+                aria-expanded={!isWorkspaceNavCollapsed}
+                title={
+                  isWorkspaceNavCollapsed
+                    ? "展開側邊導覽"
+                    : "收合側邊導覽"
+                }
+                onClick={() =>
+                  setIsWorkspaceNavCollapsed((collapsed) => !collapsed)
+                }
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
+              >
+                {isWorkspaceNavCollapsed ? (
+                  <PanelLeftOpen aria-hidden="true" size={18} />
+                ) : (
+                  <PanelLeftClose aria-hidden="true" size={18} />
+                )}
+              </button>
+            </div>
+            <div
+              id="workspace-navigation-items"
+              aria-labelledby={
+                isWorkspaceNavCollapsed
+                  ? undefined
+                  : "ledger-navigation-heading"
+              }
+              className={`grid gap-1 ${
+                isWorkspaceNavCollapsed
+                  ? "grid-cols-5 sm:grid-cols-5 lg:grid-cols-1"
+                  : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-1"
+              }`}
+            >
               {WORKSPACE_NAV.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
@@ -594,18 +709,23 @@ export function SharedLedgerWorkspace() {
                     type="button"
                     aria-label={item.label}
                     aria-current={isActive ? "page" : undefined}
+                    title={isWorkspaceNavCollapsed ? item.label : undefined}
                     onClick={() => {
                       clearFeedback();
                       selectTab(item.id);
                     }}
-                    className={`group flex min-h-14 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+                    className={`group flex min-h-12 items-center rounded-xl py-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${
+                      isWorkspaceNavCollapsed
+                        ? "justify-center px-2"
+                        : "gap-3 px-3"
+                    } ${
                       isActive
                         ? "bg-emerald-700 text-white shadow-sm"
                         : "text-slate-700 hover:bg-slate-50"
                     }`}
                   >
                     <span
-                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors ${
                         isActive
                           ? "bg-white/15 text-white"
                           : "bg-slate-100 text-slate-600 group-hover:bg-white"
@@ -613,49 +733,40 @@ export function SharedLedgerWorkspace() {
                     >
                       <Icon aria-hidden="true" size={18} />
                     </span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-semibold">
-                        {item.label}
+                    {!isWorkspaceNavCollapsed && (
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold">
+                          {item.label}
+                        </span>
+                        <span
+                          className={`mt-0.5 hidden truncate text-[11px] sm:block ${
+                            isActive ? "text-emerald-100" : "text-slate-500"
+                          }`}
+                        >
+                          {item.description}
+                        </span>
                       </span>
-                      <span
-                        className={`mt-0.5 hidden truncate text-[11px] sm:block ${
-                          isActive ? "text-emerald-100" : "text-slate-500"
-                        }`}
-                      >
-                        {item.description}
-                      </span>
-                    </span>
+                    )}
                   </button>
                 );
               })}
             </div>
           </nav>
-
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <p className="text-xs font-medium text-slate-500">你的帳本權限</p>
-            <div className="mt-3 flex items-center gap-3">
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
-                <UsersRound aria-hidden="true" size={18} />
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-900">
-                  {currentUserRole === "Owner"
-                    ? "群組管理者"
-                    : currentUserRole === "Editor"
-                      ? "編輯成員"
-                      : currentUserRole === "Viewer"
-                        ? "檢視成員"
-                        : "一般成員"}
-                </p>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {activeLedger.members.length} 位帳本成員
-                </p>
-              </div>
-            </div>
-          </section>
         </aside>
 
         <section className="min-w-0">
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs text-slate-600">
+            <HardDrive aria-hidden="true" size={15} className="text-slate-500" />
+            <span>資料僅儲存在此裝置，尚未跨裝置同步</span>
+          </div>
+          {storageError && (
+            <div
+              role="alert"
+              className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"
+            >
+              {storageError}
+            </div>
+          )}
           <header className="mb-5 flex flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-center sm:px-6">
             <div className="min-w-0">
               <p className="text-sm font-semibold text-emerald-700">
@@ -667,20 +778,52 @@ export function SharedLedgerWorkspace() {
               >
                 {activeLedger.name}
               </h1>
-              <p className="mt-1 text-sm leading-6 text-slate-500">
-                {PAGE_DESCRIPTIONS[activeTab]}
-              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <p className="text-sm leading-6 text-slate-500">
+                  {PAGE_DESCRIPTIONS[activeTab]}
+                </p>
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                  {activeLedger.currency}
+                </span>
+                <span className="text-xs text-slate-500">
+                  {currentUserRole === "Owner"
+                    ? "群組管理者"
+                    : currentUserRole === "Editor"
+                      ? "編輯成員"
+                      : currentUserRole === "Viewer"
+                        ? "檢視成員"
+                        : "一般成員"}
+                </span>
+              </div>
             </div>
-            {activeTab !== "expenses" && (
-              <Button
-                type="button"
-                onClick={() => selectTab("expenses")}
-                className="shrink-0"
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+              <label className="sr-only" htmlFor="workspace-ledger-select">
+                切換帳本
+              </label>
+              <select
+                id="workspace-ledger-select"
+                aria-label="切換帳本"
+                value={activeLedger.id}
+                onChange={(event) => handleSelectLedger(event.target.value)}
+                className="h-10 min-w-0 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800 outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100 sm:max-w-56"
               >
-                <Plus aria-hidden="true" className="mr-2 h-4 w-4" />
-                新增支出
-              </Button>
-            )}
+                {userLedgers.map((ledger) => (
+                  <option key={ledger.id} value={ledger.id}>
+                    {ledger.name}
+                  </option>
+                ))}
+              </select>
+              {activeTab !== "expenses" && (
+                <Button
+                  type="button"
+                  onClick={openExpenseForm}
+                  className="shrink-0"
+                >
+                  <Plus aria-hidden="true" className="mr-2 h-4 w-4" />
+                  新增支出
+                </Button>
+              )}
+            </div>
           </header>
 
           {ledgerNotifications.length > 0 && (
@@ -915,8 +1058,11 @@ export function SharedLedgerWorkspace() {
               transactions={activeTransactions}
               currentUserUid={currentUserUid}
               currentUserRole={currentUserRole}
+              isExpenseFormOpen={isExpenseFormOpen}
               feedbackError={feedbackError}
               feedbackSuccess={feedbackSuccess}
+              onOpenExpenseForm={() => setIsExpenseFormOpen(true)}
+              onCloseExpenseForm={() => setIsExpenseFormOpen(false)}
               onAddExpense={handleAddExpense}
               onUpdateExpense={handleUpdateExpense}
               onDeleteExpense={handleDeleteExpense}
@@ -980,6 +1126,84 @@ export function SharedLedgerWorkspace() {
           )}
         </section>
       </main>
+
+      {!isExpenseFormOpen && (
+        <Button
+          type="button"
+          aria-label="快速新增支出"
+          onClick={openExpenseForm}
+          className="fixed bottom-24 right-4 z-20 h-14 w-14 rounded-full p-0 shadow-lg lg:hidden"
+        >
+          <Plus aria-hidden="true" size={24} />
+        </Button>
+      )}
+
+      <nav
+        aria-label="手機主要導覽"
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_16px_rgba(15,23,42,0.06)] backdrop-blur lg:hidden"
+      >
+        <div className="mx-auto flex max-w-xl items-stretch justify-around px-2 pt-1.5">
+          {WORKSPACE_NAV.filter((item) => item.id !== "group").map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+
+            return (
+              <button
+                key={item.id}
+                type="button"
+                aria-label={item.label}
+                aria-current={isActive ? "page" : undefined}
+                onClick={() => {
+                  clearFeedback();
+                  selectTab(item.id);
+                }}
+                className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${
+                  isActive ? "text-emerald-800" : "text-slate-500"
+                }`}
+              >
+                <Icon aria-hidden="true" size={20} />
+                <span className="max-w-full truncate">{item.label}</span>
+              </button>
+            );
+          })}
+
+          <div className="relative flex min-w-0 flex-1">
+            <div
+              id="mobile-more-menu"
+              hidden={!isMoreMenuOpen}
+              className="absolute bottom-full right-0 mb-2 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl"
+            >
+              <button
+                type="button"
+                aria-label="開啟群組與成員"
+                onClick={() => selectTab("group")}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-slate-800 hover:bg-emerald-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600"
+              >
+                <UsersRound
+                  aria-hidden="true"
+                  className="text-emerald-700"
+                  size={18}
+                />
+                群組與成員管理
+              </button>
+            </div>
+            <button
+              type="button"
+              aria-label="更多"
+              aria-expanded={isMoreMenuOpen}
+              aria-controls="mobile-more-menu"
+              aria-current={activeTab === "group" ? "page" : undefined}
+              onClick={() => setIsMoreMenuOpen((isOpen) => !isOpen)}
+              className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 ${
+                activeTab === "group" ? "text-emerald-800" : "text-slate-500"
+              }`}
+            >
+              <MoreHorizontal aria-hidden="true" size={20} />
+              <span>更多</span>
+            </button>
+          </div>
+        </div>
+      </nav>
     </div>
   );
 }

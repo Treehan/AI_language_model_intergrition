@@ -6,6 +6,7 @@ import {
   createLedgerInState,
   createRepaymentInState,
   loadAppState,
+  loadAppStateWithStatus,
   joinLedgerByInviteInState,
   type AppDatabaseState,
 } from "../../src/lib/ledgers/index";
@@ -37,6 +38,19 @@ describe("ledger service validation and authorization", () => {
     expect(loaded.users["user-owner-1"]).not.toHaveProperty("password");
     expect(persisted).not.toContain("legacy-secret");
     expect(persisted).not.toContain('"currentUserUid":"user-owner-1"');
+  });
+
+  it("reports malformed local data without overwriting it", () => {
+    const invalidStoredValue = "{not valid json";
+    localStorage.setItem("tw_split_ledger_app_state_v1", invalidStoredValue);
+
+    const result = loadAppStateWithStatus();
+
+    expect(result.error).toContain("無法讀取此裝置的帳本資料");
+    expect(result.state.currentUserUid).toBeNull();
+    expect(localStorage.getItem("tw_split_ledger_app_state_v1")).toBe(
+      invalidStoredValue,
+    );
   });
 
   it("creates owner-ledgers and allows invited users to join with member permissions", () => {

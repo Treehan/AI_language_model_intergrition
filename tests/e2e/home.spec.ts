@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User Stories 1–10)", () => {
@@ -11,6 +12,34 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
     await expect(page.getByTestId("active-ledger-title")).toHaveText(
       "花蓮三天兩夜旅遊帳本",
     );
+    const navigationToggle = page.getByTestId("workspace-navigation-toggle");
+    await expect(navigationToggle).toHaveAttribute("aria-expanded", "true");
+    await navigationToggle.click();
+    await expect(navigationToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(
+      page.getByRole("button", { name: "支出帳目", exact: true }),
+    ).toBeVisible();
+    await navigationToggle.click();
+    await expect(navigationToggle).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("手機主要導覽可開啟群組管理並快速新增支出", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+
+    const mobileNavigation = page.getByRole("navigation", {
+      name: "手機主要導覽",
+    });
+    await expect(mobileNavigation).toBeVisible();
+    await mobileNavigation.getByRole("button", { name: "更多" }).click();
+    await page.getByRole("button", { name: "開啟群組與成員" }).click();
+    await expect(page.getByLabel("邀請連結或邀請碼")).toBeVisible();
+
+    await mobileNavigation
+      .getByRole("button", { name: "支出帳目", exact: true })
+      .click();
+    await page.getByRole("button", { name: "快速新增支出" }).click();
+    await expect(page.getByLabel("項目名稱")).toBeVisible();
   });
 
   test("User Story 1：建立個人帳號與重複帳號驗證", async ({ page }) => {
@@ -112,6 +141,7 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
   }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "支出帳目", exact: true }).click();
+    await page.getByRole("button", { name: "新增支出" }).click();
 
     // User Story 4 Scenario 2: 金額為空白或小於等於 0
     await page.getByLabel("項目名稱").fill("測試支出");
@@ -144,6 +174,25 @@ test.describe("小組記帳與分帳 App - 端對端使用者故事驗收 (User 
     await page.getByLabel(/金額/).fill("1200");
     await page.getByRole("button", { name: "儲存" }).click();
     await expect(page.getByText(/修改紀錄：原為「東大門夜市聚餐」/)).toBeVisible();
+
+    await page.getByLabel("搜尋帳目").fill("伴手禮採買");
+    await expect(page.getByTestId(/transaction-item-/)).toHaveCount(1);
+    await page.getByLabel("搜尋帳目").fill("找不到的項目");
+    await expect(
+      page.getByText("找不到符合條件的帳目，請調整或清除篩選。"),
+    ).toBeVisible();
+    await page.getByLabel("搜尋帳目").fill("伴手禮採買");
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("button", { name: /匯出 CSV/ }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/支出紀錄-\d{4}-\d{2}-\d{2}\.csv$/);
+    const downloadPath = await download.path();
+    if (!downloadPath) {
+      throw new Error("CSV 匯出未提供下載檔案");
+    }
+    const csv = await readFile(downloadPath, "utf8");
+    expect(csv).toContain("伴手禮採買");
+    expect(csv).not.toContain("alice@example.com");
   });
 
   test("User Story 6, 7, 10：查看結算、標記還款與超額檢查、查看支出統計圓餅圖", async ({

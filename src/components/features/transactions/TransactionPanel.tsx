@@ -17,6 +17,10 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { formatCurrencyInteger } from "@/lib/finance";
+import {
+  createLedgerCsvFilename,
+  createTransactionsCsv,
+} from "@/lib/transactions/export";
 import type { Ledger, LedgerRole } from "@/types/ledger";
 import type {
   ExpenseCategory,
@@ -40,8 +44,11 @@ export interface TransactionPanelProps {
   transactions: Transaction[];
   currentUserUid: string;
   currentUserRole: LedgerRole;
+  isExpenseFormOpen: boolean;
   feedbackError?: string | null;
   feedbackSuccess?: string | null;
+  onOpenExpenseForm: () => void;
+  onCloseExpenseForm: () => void;
   onAddExpense: (payload: ExpenseSubmissionPayload) => boolean;
   onUpdateExpense: (
     transactionId: string,
@@ -64,8 +71,11 @@ export function TransactionPanel({
   transactions,
   currentUserUid,
   currentUserRole,
+  isExpenseFormOpen,
   feedbackError,
   feedbackSuccess,
+  onOpenExpenseForm,
+  onCloseExpenseForm,
   onAddExpense,
   onUpdateExpense,
   onDeleteExpense,
@@ -85,6 +95,12 @@ export function TransactionPanel({
   const [customSplitStrs, setCustomSplitStrs] = React.useState<
     Record<string, string>
   >({});
+  const [searchText, setSearchText] = React.useState("");
+  const [dateFrom, setDateFrom] = React.useState("");
+  const [dateTo, setDateTo] = React.useState("");
+  const [categoryFilter, setCategoryFilter] = React.useState<
+    ExpenseCategory | "all"
+  >("all");
 
   const canManageAll =
     currentUserRole === "Owner" || currentUserRole === "Editor";
@@ -96,6 +112,7 @@ export function TransactionPanel({
   };
 
   const handleStartEdit = (tx: Transaction) => {
+    onOpenExpenseForm();
     setEditingTxId(tx.id);
     setTitle(tx.title);
     setAmountStr(String(tx.amount));
@@ -115,9 +132,13 @@ export function TransactionPanel({
     setEditingTxId(null);
     setTitle("");
     setAmountStr("");
+    setPayerId(currentUserUid);
+    setDate(new Date().toISOString().slice(0, 10));
+    setCategory("餐飲");
     setSplitMethod("equal");
     setParticipants(ledger.members);
     setCustomSplitStrs({});
+    onCloseExpenseForm();
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -151,10 +172,75 @@ export function TransactionPanel({
       if (ok) {
         setTitle("");
         setAmountStr("");
+        setPayerId(currentUserUid);
+        setDate(new Date().toISOString().slice(0, 10));
+        setCategory("餐飲");
+        setSplitMethod("equal");
+        setParticipants(ledger.members);
         setCustomSplitStrs({});
+        onCloseExpenseForm();
       }
     }
   };
+
+  const filteredTransactions = React.useMemo(() => {
+    const query = searchText.trim().toLocaleLowerCase();
+    return [...transactions]
+      .filter((tx) => {
+        const payerName =
+          ledger.memberProfiles[tx.payerId]?.displayName ?? tx.payerId;
+        const participantNames = tx.participants
+          .map((uid) => ledger.memberProfiles[uid]?.displayName ?? uid)
+          .join(" ");
+        const matchesQuery =
+          query.length === 0 ||
+          [tx.title, tx.category, tx.date, payerName, participantNames].some(
+            (value) => value.toLocaleLowerCase().includes(query),
+          );
+        return (
+          matchesQuery &&
+          (!dateFrom || tx.date >= dateFrom) &&
+          (!dateTo || tx.date <= dateTo) &&
+          (categoryFilter === "all" || tx.category === categoryFilter)
+        );
+      })
+      .sort(
+        (a, b) =>
+          b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt),
+      );
+  }, [
+    categoryFilter,
+    dateFrom,
+    dateTo,
+    ledger.memberProfiles,
+    searchText,
+    transactions,
+  ]);
+
+  const handleExportCsv = () => {
+    const csv = createTransactionsCsv(ledger, filteredTransactions);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = createLedgerCsvFilename(ledger.name);
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const clearFilters = () => {
+    setSearchText("");
+    setDateFrom("");
+    setDateTo("");
+    setCategoryFilter("all");
+  };
+  const hasActiveFilters =
+    searchText.trim() !== "" ||
+    dateFrom !== "" ||
+    dateTo !== "" ||
+    categoryFilter !== "all";
 
   return (
     <div className="space-y-6">
@@ -175,16 +261,137 @@ export function TransactionPanel({
         </div>
       )}
 
-      {/* 新增 / 修改支出表單 */}
       <Card>
-        <CardHeader>
-          <CardTitle>{editingTxId ? "修改支出" : "新增支出"}</CardTitle>
-          <CardDescription>
-            所有金額皆以整數計算，支援「平均分攤（自動分配零頭）」與「指定金額」
-          </CardDescription>
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle>支出紀錄（共 {transactions.length} 筆）</CardTitle>
+            <CardDescription className="mt-1">
+              搜尋項目、付款人或成員，快速找到需要的帳目。
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleExportCsv}
+              disabled={filteredTransactions.length === 0}
+            >
+              匯出 CSV（{filteredTransactions.length}）
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                if (!editingTxId) {
+                  setTitle("");
+                  setAmountStr("");
+                  setPayerId(currentUserUid);
+                  setDate(new Date().toISOString().slice(0, 10));
+                  setCategory("餐飲");
+                  setSplitMethod("equal");
+                  setParticipants(ledger.members);
+                  setCustomSplitStrs({});
+                }
+                onOpenExpenseForm();
+              }}
+            >
+              新增支出
+            </Button>
+          </div>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} noValidate className="space-y-4">
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="sm:col-span-2">
+              <label
+                htmlFor="expense-search"
+                className="mb-1 block text-xs font-medium text-slate-700"
+              >
+                搜尋帳目
+              </label>
+              <Input
+                id="expense-search"
+                type="search"
+                placeholder="項目、付款人或分攤成員"
+                value={searchText}
+                onChange={(event) => setSearchText(event.target.value)}
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="expense-filter-category"
+                className="mb-1 block text-xs font-medium text-slate-700"
+              >
+                類別
+              </label>
+              <select
+                id="expense-filter-category"
+                value={categoryFilter}
+                onChange={(event) =>
+                  setCategoryFilter(event.target.value as ExpenseCategory | "all")
+                }
+                className="flex h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="all">所有類別</option>
+                {CATEGORIES.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:col-span-2 xl:col-span-1">
+              <div>
+                <label
+                  htmlFor="expense-filter-date-from"
+                  className="mb-1 block text-xs font-medium text-slate-700"
+                >
+                  起始日期
+                </label>
+                <Input
+                  id="expense-filter-date-from"
+                  type="date"
+                  value={dateFrom}
+                  onChange={(event) => setDateFrom(event.target.value)}
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="expense-filter-date-to"
+                  className="mb-1 block text-xs font-medium text-slate-700"
+                >
+                  結束日期
+                </label>
+                <Input
+                  id="expense-filter-date-to"
+                  type="date"
+                  value={dateTo}
+                  onChange={(event) => setDateTo(event.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="text-sm font-medium text-emerald-800 underline-offset-4 hover:underline"
+            >
+              清除篩選
+            </button>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 新增 / 修改支出表單 */}
+      {isExpenseFormOpen && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{editingTxId ? "修改支出" : "新增支出"}</CardTitle>
+            <CardDescription>
+              所有金額皆以整數計算，支援「平均分攤（自動分配零頭）」與「指定金額」
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} noValidate className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label
@@ -337,8 +544,8 @@ export function TransactionPanel({
                         <div className="w-28">
                           <Input
                             type="number"
-                              min="0"
-                              max="1000000000000"
+                            min="0"
+                            max="1000000000000"
                             step="1"
                             aria-label={`${displayName}分攤金額`}
                             placeholder="金額"
@@ -369,15 +576,25 @@ export function TransactionPanel({
                   取消修改
                 </Button>
               )}
+              {!editingTxId && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCancelEdit}
+                >
+                  取消新增
+                </Button>
+              )}
             </div>
-          </form>
-        </CardContent>
-      </Card>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       {/* 群組帳目列表 (User Story 4, 5, 8) */}
       <Card>
         <CardHeader>
-          <CardTitle>群組帳目列表（共 {transactions.length} 筆）</CardTitle>
+          <CardTitle>帳目清單（顯示 {filteredTransactions.length} 筆）</CardTitle>
           <CardDescription>
             顯示每一筆支出的付款人、類別、各成員分攤明細與修改紀錄
           </CardDescription>
@@ -385,11 +602,15 @@ export function TransactionPanel({
         <CardContent>
           {transactions.length === 0 ? (
             <p className="py-6 text-center text-sm text-slate-500">
-              目前尚無支出紀錄，請由上方表單新增第一筆支出。
+              目前尚無支出紀錄，新增第一筆支出後就會顯示在這裡。
+            </p>
+          ) : filteredTransactions.length === 0 ? (
+            <p className="py-6 text-center text-sm text-slate-500">
+              找不到符合條件的帳目，請調整或清除篩選。
             </p>
           ) : (
             <div className="space-y-3">
-              {transactions.map((tx) => {
+              {filteredTransactions.map((tx) => {
                 const payerName =
                   ledger.memberProfiles[tx.payerId]?.displayName ?? tx.payerId;
 

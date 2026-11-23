@@ -408,16 +408,21 @@ export function createInitialAppState(): AppDatabaseState {
   };
 }
 
-export function loadAppState(): AppDatabaseState {
+export interface AppStateLoadResult {
+  state: AppDatabaseState;
+  error?: string;
+}
+
+export function loadAppStateWithStatus(): AppStateLoadResult {
   if (typeof window === "undefined") {
-    return createInitialAppState();
+    return { state: createInitialAppState() };
   }
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       const initial = createInitialAppState();
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
-      return initial;
+      return { state: initial };
     }
     const stored = JSON.parse(raw) as AppDatabaseState & {
       users?: Record<string, UserProfile & { password?: string }>;
@@ -440,10 +445,22 @@ export function loadAppState(): AppDatabaseState {
       currentUserUid: null,
     };
     saveAppState(migratedState);
-    return migratedState;
-  } catch {
-    return createInitialAppState();
+    return { state: migratedState };
+  } catch (error) {
+    return {
+      state: createInitialAppState(),
+      error:
+        error instanceof SyntaxError
+          ? "無法讀取此裝置的帳本資料；為避免覆寫原資料，已暫停修改。"
+          : error instanceof Error
+            ? error.message
+            : "無法讀取此裝置的帳本資料；為避免覆寫原資料，已暫停修改。",
+    };
   }
+}
+
+export function loadAppState(): AppDatabaseState {
+  return loadAppStateWithStatus().state;
 }
 
 export function saveAppState(state: AppDatabaseState): void {
