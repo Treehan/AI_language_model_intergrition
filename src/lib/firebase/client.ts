@@ -6,33 +6,6 @@ import { type FirebaseApp, getApp, getApps, initializeApp } from "firebase/app";
 import { type Auth, getAuth } from "firebase/auth";
 import { type Firestore, getFirestore } from "firebase/firestore";
 
-function getFirebaseConfig() {
-  const values = {
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  };
-  const missingSettings = Object.entries(values)
-    .filter(([, value]) => !value)
-    .map(([key]) => key);
-  if (missingSettings.length > 0) {
-    throw new Error(
-      `Firebase 設定不完整，請檢查 .env.local：${missingSettings.join(", ")}`,
-    );
-  }
-  return {
-    apiKey: values.apiKey ?? "",
-    authDomain: values.authDomain ?? "",
-    projectId: values.projectId ?? "",
-    storageBucket: values.storageBucket ?? "",
-    messagingSenderId: values.messagingSenderId ?? "",
-    appId: values.appId ?? "",
-  };
-}
-
 export function isFirebaseEnabled(): boolean {
   return process.env.NEXT_PUBLIC_FIREBASE_ENABLED === "true";
 }
@@ -41,11 +14,26 @@ export function isFirebaseEnabled(): boolean {
  * 取得或初始化 Firebase Client App
  */
 export function getFirebaseClientApp(): FirebaseApp {
-  const config = getFirebaseConfig();
   if (getApps().length > 0) {
     return getApp();
   }
-  return initializeApp(config);
+  const firebaseConfig = {
+    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  };
+  const missingFields = Object.entries(firebaseConfig)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+  if (missingFields.length > 0) {
+    throw new Error(
+      `Firebase 尚未完成設定，請補齊環境變數：${missingFields.join(", ")}`,
+    );
+  }
+  return initializeApp(firebaseConfig);
 }
 
 /**

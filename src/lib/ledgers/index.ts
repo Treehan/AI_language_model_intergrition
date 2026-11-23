@@ -22,10 +22,7 @@ import {
   validateExpenseInput,
   validateRepaymentAmount,
 } from "@/lib/finance";
-import {
-  getFirebaseClientDb,
-  isFirebaseEnabled,
-} from "@/lib/firebase/client";
+import { getFirebaseClientDb } from "@/lib/firebase/client";
 import {
   ledgerConverter,
   notificationConverter,
@@ -168,7 +165,7 @@ export async function confirmRepaymentInFirestore(
 // ============================================================================
 
 export interface AppDatabaseState {
-  users: Record<string, UserProfile & { password?: string }>;
+  users: Record<string, UserProfile>;
   currentUserUid: string | null;
   ledgers: Record<string, Ledger>;
   transactions: Record<string, Transaction[]>;
@@ -188,42 +185,94 @@ export function createEmptyAppState(): AppDatabaseState {
 }
 
 const STORAGE_KEY = "tw_split_ledger_app_state_v1";
+const CURRENCY_CODES: readonly CurrencyCode[] = [
+  "TWD",
+  "JPY",
+  "USD",
+  "EUR",
+  "KRW",
+];
+const EXPENSE_CATEGORIES: readonly ExpenseCategory[] = [
+  "餐飲",
+  "交通",
+  "住宿",
+  "娛樂",
+  "購物",
+  "其他",
+];
+
+function isValidDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function getExpenseValidationError(
+  ledger: Ledger,
+  params: {
+    title: string;
+    amount: number;
+    payerId: string;
+    date: string;
+    category: ExpenseCategory;
+    participants: string[];
+  },
+): string | undefined {
+  const basicValidation = validateExpenseInput(params);
+  if (!basicValidation.valid) {
+    return basicValidation.error;
+  }
+  if (!isValidDate(params.date)) {
+    return "請輸入有效的支出日期";
+  }
+  if (!EXPENSE_CATEGORIES.includes(params.category)) {
+    return "請選擇有效的支出類別";
+  }
+  if (!ledger.members.includes(params.payerId)) {
+    return "付款人必須是群組成員";
+  }
+  if (new Set(params.participants).size !== params.participants.length) {
+    return "請勿重複選擇分攤成員";
+  }
+  if (params.participants.some((uid) => !ledger.members.includes(uid))) {
+    return "分攤成員必須是群組成員";
+  }
+  return undefined;
+}
 
 /**
  * 建立預設展示與種子資料，讓使用者與自動化測試可立即體驗完整流程
  */
 export function createInitialAppState(): AppDatabaseState {
   const now = "2026-11-16T09:00:00.000Z";
-  const u1: UserProfile & { password?: string } = {
+  const u1: UserProfile = {
     uid: "user-owner-1",
     email: "alice@example.com",
     phone: "0912345678",
     displayName: "陳小美",
-    password: "password123",
     createdAt: now,
   };
-  const u2: UserProfile & { password?: string } = {
+  const u2: UserProfile = {
     uid: "user-member-2",
     email: "bob@example.com",
     phone: "0922333444",
     displayName: "林大明",
-    password: "password123",
     createdAt: now,
   };
-  const u3: UserProfile & { password?: string } = {
+  const u3: UserProfile = {
     uid: "user-member-3",
     email: "carol@example.com",
     phone: "0933555666",
     displayName: "張雅婷",
-    password: "password123",
     createdAt: now,
   };
-  const u4: UserProfile & { password?: string } = {
+  const u4: UserProfile = {
     uid: "user-settled-4",
     email: "david@example.com",
     phone: "0944777888",
     displayName: "王志豪",
-    password: "password123",
     createdAt: now,
   };
 
@@ -353,7 +402,7 @@ export function createInitialAppState(): AppDatabaseState {
       [u3.uid]: u3,
       [u4.uid]: u4,
     },
-    currentUserUid: u1.uid,
+    currentUserUid: null,
     ledgers: {
       [defaultLedgerId]: defaultLedger,
       [expiredLedgerId]: expiredLedger,
@@ -381,114 +430,48 @@ export function loadAppState(): AppDatabaseState {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
       return initial;
     }
-    return JSON.parse(raw) as AppDatabaseState;
+    const stored = JSON.parse(raw) as AppDatabaseState & {
+      users?: Record<string, UserProfile & { password?: string }>;
+    };
+    const users = Object.fromEntries(
+      Object.entries(stored.users ?? {}).map(([uid, user]) => [
+        uid,
+        {
+          uid: user.uid || uid,
+          email: user.email ?? "",
+          phone: user.phone,
+          displayName: user.displayName ?? "",
+          createdAt: user.createdAt ?? "",
+        } satisfies UserProfile,
+      ]),
+    );
+    const migratedState: AppDatabaseState = {
+      ...stored,
+      users,
+      currentUserUid: null,
+    };
+    saveAppState(migratedState);
+    return migratedState;
   } catch {
     return createInitialAppState();
   }
 }
 
 export function saveAppState(state: AppDatabaseState): void {
-  if (typeof window === "undefined" || isFirebaseEnabled()) {
+  if (
+    typeof window === "undefined" ||
+    process.env.NEXT_PUBLIC_FIREBASE_ENABLED === "true"
+  ) {
     return;
   }
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...state, currentUserUid: null }),
+    );
   } catch {
-    // 忽略無痕模式或配額錯誤
+    throw new Error("無法儲存本機帳本資料，請檢查瀏覽器儲存空間設定");
   }
-}
-
-/**
- * User Story 1：建立帳號
- * - 檢查電子郵件或手機號碼是否已被使用
- * - 若已存在則回傳「此帳號已存在，請直接登入」
- * - 成功建立後直接進入已登入狀態
- */
-export function registerAccountInState(
-  state: AppDatabaseState,
-  params: {
-    identifier: string;
-    password: string;
-    displayName: string;
-  },
-): { nextState: AppDatabaseState; error?: string; user?: UserProfile } {
-  const identifier = params.identifier.trim();
-  const displayName = params.displayName.trim();
-  const password = params.password.trim();
-
-  if (!identifier) {
-    return { nextState: state, error: "請輸入電子郵件或手機號碼" };
-  }
-  if (!password || password.length < 6) {
-    return { nextState: state, error: "請輸入至少 6 碼的密碼" };
-  }
-  if (!displayName) {
-    return { nextState: state, error: "請輸入暱稱" };
-  }
-
-  const normalizedId = identifier.toLowerCase();
-  const exists = Object.values(state.users).some(
-    (u) =>
-      u.email.toLowerCase() === normalizedId ||
-      (u.phone && u.phone === normalizedId),
-  );
-
-  if (exists) {
-    return {
-      nextState: state,
-      error: "此帳號已存在，請直接登入",
-    };
-  }
-
-  const isPhone = /^[0-9+\-\s]+$/.test(identifier);
-  const uid = `user-${Date.now()}`;
-  const now = new Date().toISOString();
-  const newUser: UserProfile & { password?: string } = {
-    uid,
-    email: isPhone ? `${identifier}@phone.local` : identifier,
-    phone: isPhone ? identifier : undefined,
-    displayName,
-    password,
-    createdAt: now,
-  };
-
-  const nextState: AppDatabaseState = {
-    ...state,
-    users: {
-      ...state.users,
-      [uid]: newUser,
-    },
-    currentUserUid: uid,
-  };
-  saveAppState(nextState);
-  return { nextState, user: newUser };
-}
-
-/**
- * 登入既有帳號
- */
-export function loginAccountInState(
-  state: AppDatabaseState,
-  params: { identifier: string; password: string },
-): { nextState: AppDatabaseState; error?: string; user?: UserProfile } {
-  const normalizedId = params.identifier.trim().toLowerCase();
-  const found = Object.values(state.users).find(
-    (u) =>
-      u.email.toLowerCase() === normalizedId ||
-      (u.phone && u.phone === normalizedId),
-  );
-  if (!found) {
-    return { nextState: state, error: "找不到此帳號，請先建立帳號" };
-  }
-  if (found.password && found.password !== params.password) {
-    return { nextState: state, error: "密碼不正確，請重新輸入" };
-  }
-  const nextState: AppDatabaseState = {
-    ...state,
-    currentUserUid: found.uid,
-  };
-  saveAppState(nextState);
-  return { nextState, user: found };
 }
 
 /**
@@ -504,6 +487,9 @@ export function deleteAccountInState(
   const uid = targetUid ?? state.currentUserUid;
   if (!uid || !state.users[uid]) {
     return { nextState: state, error: "請先登入再執行刪除帳號" };
+  }
+  if (uid !== state.currentUserUid) {
+    return { nextState: state, error: "只能刪除目前登入的帳號" };
   }
 
   const userToDelete = state.users[uid];
@@ -575,12 +561,6 @@ export function deleteAccountInState(
     };
   }
 
-  const remainingUserUids = Object.keys(nextUsers);
-  const nextCurrentUid =
-    state.currentUserUid === uid
-      ? (remainingUserUids[0] ?? null)
-      : state.currentUserUid;
-
   const notif: LedgerNotification = {
     id: `notif-del-acc-${Date.now()}`,
     ledgerId: Object.keys(nextLedgers)[0] ?? "system",
@@ -593,14 +573,13 @@ export function deleteAccountInState(
   const nextState: AppDatabaseState = {
     ...state,
     users: nextUsers,
-    currentUserUid: nextCurrentUid,
+    currentUserUid: null,
     ledgers: nextLedgers,
     transactions: nextTransactions,
     repayments: nextRepayments,
     notifications: [notif, ...state.notifications],
   };
 
-  saveAppState(nextState);
   return { nextState, deletedUserName: userToDelete.displayName };
 }
 
@@ -628,10 +607,18 @@ export function createLedgerInState(
 
   const creator = state.users[currentUid];
   const now = new Date().toISOString();
-  const ledgerId = params.id ?? `ledger-${Date.now()}`;
+  if (!CURRENCY_CODES.includes(params.currency)) {
+    return { nextState: state, error: "請選擇有效的帳本幣別" };
+  }
+  if (trimmedName.length > 100) {
+    return { nextState: state, error: "群組名稱不可超過 100 個字" };
+  }
+
+  const ledgerId = params.id ?? `ledger-${crypto.randomUUID()}`;
   const inviteCode =
     params.inviteCode ??
-    `INV-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    `INV-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`;
+  const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
 
   const newLedger: Ledger = {
     id: ledgerId,
@@ -652,7 +639,7 @@ export function createLedgerInState(
     invite: {
       code: inviteCode,
       active: true,
-      expiresAt: "2028-12-31T23:59:59.000Z",
+      expiresAt,
       createdBy: currentUid,
     },
     createdAt: now,
@@ -708,7 +695,7 @@ export function joinLedgerByInviteInState(
   }
 
   const targetLedger = Object.values(state.ledgers).find(
-    (l) => l.invite.code.toUpperCase() === extractedCode.toUpperCase(),
+    (l) => l.invite.code.toUpperCase() === extractedCode.trim().toUpperCase(),
   );
 
   if (!targetLedger) {
@@ -718,9 +705,11 @@ export function joinLedgerByInviteInState(
     };
   }
 
+  const expiresAt = new Date(targetLedger.invite.expiresAt).getTime();
   const isExpired =
     !targetLedger.invite.active ||
-    new Date(targetLedger.invite.expiresAt).getTime() < Date.now();
+    Number.isNaN(expiresAt) ||
+    expiresAt <= Date.now();
 
   if (isExpired) {
     return {
@@ -740,7 +729,7 @@ export function joinLedgerByInviteInState(
     members: [...targetLedger.members, currentUid],
     roles: {
       ...targetLedger.roles,
-      [currentUid]: "Editor",
+      [currentUid]: "Member",
     },
     memberProfiles: {
       ...targetLedger.memberProfiles,
@@ -787,6 +776,14 @@ export function toggleLedgerInviteInState(
     invite: {
       ...ledger.invite,
       active,
+      ...(active
+        ? {
+            code: `INV-${crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase()}`,
+            expiresAt: new Date(
+              Date.now() + 90 * 24 * 60 * 60 * 1000,
+            ).toISOString(),
+          }
+        : {}),
     },
     updatedAt: new Date().toISOString(),
   };
@@ -840,13 +837,9 @@ export function addExpenseInState(
     };
   }
 
-  const basicValidation = validateExpenseInput({
-    title: params.title,
-    amount: params.amount,
-    participants: params.participants,
-  });
-  if (!basicValidation.valid) {
-    return { nextState: state, error: basicValidation.error };
+  const validationError = getExpenseValidationError(ledger, params);
+  if (validationError) {
+    return { nextState: state, error: validationError };
   }
 
   let finalSplits: Record<string, number> = {};
@@ -866,7 +859,7 @@ export function addExpenseInState(
 
   const now = new Date().toISOString();
   const tx: Transaction = {
-    id: `tx-${Date.now()}`,
+    id: `tx-${crypto.randomUUID()}`,
     ledgerId: params.ledgerId,
     title: params.title.trim(),
     amount: params.amount,
@@ -883,7 +876,7 @@ export function addExpenseInState(
   };
 
   const newNotifications: LedgerNotification[] = tx.participants.map((uid) => ({
-    id: `notif-${Date.now()}-${uid}`,
+    id: `notif-${crypto.randomUUID()}`,
     ledgerId: params.ledgerId,
     recipientUid: uid,
     message: `新增支出「${tx.title}」（${tx.amount} 元），您的分攤金額為 ${tx.splits[uid] ?? 0} 元`,
@@ -938,13 +931,9 @@ export function updateExpenseInState(
     return { nextState: state, error: "找不到該筆支出紀錄" };
   }
 
-  const basicValidation = validateExpenseInput({
-    title: params.title,
-    amount: params.amount,
-    participants: params.participants,
-  });
-  if (!basicValidation.valid) {
-    return { nextState: state, error: basicValidation.error };
+  const validationError = getExpenseValidationError(ledger, params);
+  if (validationError) {
+    return { nextState: state, error: validationError };
   }
 
   let finalSplits: Record<string, number> = {};
@@ -986,7 +975,7 @@ export function updateExpenseInState(
   };
 
   const notif: LedgerNotification = {
-    id: `notif-edit-${Date.now()}`,
+    id: `notif-edit-${crypto.randomUUID()}`,
     ledgerId: params.ledgerId,
     recipientUid: "all",
     message: `管理者已修改支出「${updatedTx.title}」（原為「${existing.title}」 ${existing.amount} 元 → 更新為 ${updatedTx.amount} 元），系統已重新計算各成員餘額`,
@@ -1030,7 +1019,7 @@ export function deleteExpenseInState(
 
   const now = new Date().toISOString();
   const notif: LedgerNotification = {
-    id: `notif-del-${Date.now()}`,
+    id: `notif-del-${crypto.randomUUID()}`,
     ledgerId: params.ledgerId,
     recipientUid: "all",
     message: `管理者已刪除支出「${target.title}」（${target.amount} 元），系統已重新計算各成員餘額`,
@@ -1063,13 +1052,38 @@ export function createRepaymentInState(
   },
 ): { nextState: AppDatabaseState; error?: string; repayment?: Repayment } {
   const ledger = state.ledgers[params.ledgerId];
-  if (!ledger) {
-    return { nextState: state, error: "找不到帳本" };
+  const currentUid = state.currentUserUid;
+  if (!ledger || !currentUid) {
+    return { nextState: state, error: "找不到帳本或尚未登入" };
+  }
+  if (!ledger.members.includes(currentUid)) {
+    return { nextState: state, error: "您不是此群組的成員，無權標記還款" };
+  }
+  if (ledger.roles[currentUid] === "Viewer") {
+    return { nextState: state, error: "檢視者無權標記還款" };
+  }
+  if (params.fromUid !== currentUid) {
+    return { nextState: state, error: "只能標記自己的還款" };
+  }
+  if (
+    !ledger.members.includes(params.fromUid) ||
+    !ledger.members.includes(params.toUid)
+  ) {
+    return { nextState: state, error: "還款人與收款人都必須是群組成員" };
   }
 
   const txList = state.transactions[params.ledgerId] ?? [];
   const repList = state.repayments[params.ledgerId] ?? [];
   const netBalances = calculateNetBalances(ledger.members, txList, repList);
+  for (const repayment of repList) {
+    if (repayment.status !== "pending") {
+      continue;
+    }
+    netBalances[repayment.fromUid] =
+      (netBalances[repayment.fromUid] ?? 0) + repayment.amount;
+    netBalances[repayment.toUid] =
+      (netBalances[repayment.toUid] ?? 0) - repayment.amount;
+  }
 
   const check = validateRepaymentAmount({
     netBalances,
@@ -1084,7 +1098,7 @@ export function createRepaymentInState(
 
   const now = new Date().toISOString();
   const repayment: Repayment = {
-    id: `rep-${Date.now()}`,
+    id: `rep-${crypto.randomUUID()}`,
     ledgerId: params.ledgerId,
     fromUid: params.fromUid,
     toUid: params.toUid,
@@ -1099,7 +1113,7 @@ export function createRepaymentInState(
     ledger.memberProfiles[params.toUid]?.displayName ?? params.toUid;
 
   const notif: LedgerNotification = {
-    id: `notif-rep-${Date.now()}`,
+    id: `notif-rep-${crypto.randomUUID()}`,
     ledgerId: params.ledgerId,
     recipientUid: params.toUid,
     message: `${fromName} 已標記還款 ${params.amount} 元給 ${toName}，等待收款人確認`,
@@ -1123,14 +1137,21 @@ export function confirmRepaymentInState(
   state: AppDatabaseState,
   params: { ledgerId: string; repaymentId: string },
 ): { nextState: AppDatabaseState; error?: string } {
+  const currentUid = state.currentUserUid;
   const ledger = state.ledgers[params.ledgerId];
-  if (!ledger) {
-    return { nextState: state, error: "找不到帳本" };
+  if (!ledger || !currentUid) {
+    return { nextState: state, error: "找不到帳本或尚未登入" };
   }
   const repList = state.repayments[params.ledgerId] ?? [];
   const target = repList.find((r) => r.id === params.repaymentId);
   if (!target) {
     return { nextState: state, error: "找不到還款紀錄" };
+  }
+  if (target.toUid !== currentUid) {
+    return { nextState: state, error: "只有收款人可以確認這筆還款" };
+  }
+  if (target.status !== "pending") {
+    return { nextState: state, error: "這筆還款已完成確認" };
   }
 
   const now = new Date().toISOString();
@@ -1140,7 +1161,7 @@ export function confirmRepaymentInState(
     ledger.memberProfiles[target.toUid]?.displayName ?? target.toUid;
 
   const notif: LedgerNotification = {
-    id: `notif-rep-confirm-${Date.now()}`,
+    id: `notif-rep-confirm-${crypto.randomUUID()}`,
     ledgerId: params.ledgerId,
     recipientUid: target.fromUid,
     message: `${toName} 已確認收到 ${fromName} 的還款 ${target.amount} 元，雙方餘額已更新`,
@@ -1179,6 +1200,9 @@ export function removeMemberFromLedgerInState(
   if (ledger.roles[currentUid] !== "Owner") {
     return { nextState: state, error: "僅群組管理者可移除成員" };
   }
+  if (!ledger.members.includes(params.targetUid)) {
+    return { nextState: state, error: "找不到此群組成員" };
+  }
   if (params.targetUid === currentUid) {
     return { nextState: state, error: "群組管理者不可移除自己" };
   }
@@ -1213,7 +1237,7 @@ export function removeMemberFromLedgerInState(
   };
 
   const notif: LedgerNotification = {
-    id: `notif-remove-${Date.now()}`,
+    id: `notif-remove-${crypto.randomUUID()}`,
     ledgerId: params.ledgerId,
     recipientUid: params.targetUid,
     message: `成員「${removedProfile?.displayName ?? params.targetUid}」已由群組管理者移出群組「${ledger.name}」`,

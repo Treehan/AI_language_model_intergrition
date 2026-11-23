@@ -2,8 +2,10 @@ import {
   collection,
   doc,
   arrayUnion,
+  getDoc,
   onSnapshot,
   query,
+  setDoc,
   updateDoc,
   where,
   writeBatch,
@@ -145,6 +147,23 @@ export async function joinFirebaseLedgerByInvite(params: {
     },
     updatedAt: new Date().toISOString(),
   });
+}
+
+export async function getOrCreateFirebaseUserProfile(
+  profile: Omit<UserProfile, "createdAt">,
+): Promise<UserProfile> {
+  const profileReference = doc(getUsersCollection(), profile.uid);
+  const existing = await getDoc(profileReference);
+  if (existing.exists()) {
+    return existing.data();
+  }
+
+  const newProfile: UserProfile = {
+    ...profile,
+    createdAt: new Date().toISOString(),
+  };
+  await setDoc(profileReference, newProfile);
+  return newProfile;
 }
 
 export function subscribeToFirebaseWorkspace(

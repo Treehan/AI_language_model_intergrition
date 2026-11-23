@@ -6,6 +6,7 @@
  * 嚴禁在內部直接查詢 Firestore 或執行分帳運算。
  */
 import * as React from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -69,14 +70,34 @@ export function LedgerGroupPanel({
   const [newGroupName, setNewGroupName] = React.useState("");
   const [newGroupCurrency, setNewGroupCurrency] =
     React.useState<CurrencyCode>("TWD");
-  const [inviteInput, setInviteInput] = React.useState("");
+  const [inviteInput, setInviteInput] = React.useState<string | null>(null);
 
+  const subscribeToLocation = React.useCallback((callback: () => void) => {
+    window.addEventListener("popstate", callback);
+    return () => window.removeEventListener("popstate", callback);
+  }, []);
+  const inviteOrigin = React.useSyncExternalStore(
+    subscribeToLocation,
+    () => window.location.origin,
+    () => "https://ai-language-model-intergrition.web.app",
+  );
+  const inviteFromUrl = React.useSyncExternalStore(
+    subscribeToLocation,
+    () => {
+      const url = new URL(window.location.href);
+      return firebaseMode
+        ? url.searchParams.has("ledger")
+          ? url.href
+          : ""
+        : url.searchParams.get("invite") ?? "";
+    },
+    () => "",
+  );
+  const inviteInputValue = inviteInput ?? inviteFromUrl;
   const inviteLink = activeLedger
     ? firebaseMode
-      ? `https://ai-language-model-intergrition.web.app/ledgers?${new URLSearchParams({
-          ledger: activeLedger.id,
-        }).toString()}`
-      : `https://ai-language-model-intergrition.web.app/ledgers?ledger=${activeLedger.id}&invite=${activeLedger.invite.code}`
+      ? `${inviteOrigin}/ledgers?ledger=${encodeURIComponent(activeLedger.id)}`
+      : `${inviteOrigin}/ledgers?invite=${encodeURIComponent(activeLedger.invite.code)}`
     : "";
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
@@ -89,7 +110,7 @@ export function LedgerGroupPanel({
 
   const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await onJoinLedger(inviteInput);
+    await onJoinLedger(inviteInputValue);
   };
 
   return (
@@ -192,14 +213,9 @@ export function LedgerGroupPanel({
                       ? "貼上完整邀請連結"
                       : "貼上邀請連結或輸入邀請碼，如 HUALIEN2026"
                   }
-                  value={inviteInput}
+                  value={inviteInputValue}
                   onChange={(e) => setInviteInput(e.target.value)}
                 />
-                {firebaseMode && (
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    請貼上完整邀請連結；雲端模式不接受單獨的邀請碼。
-                  </p>
-                )}
               </div>
               <Button type="submit" variant="outline" className="w-full">
                 加入群組
@@ -288,44 +304,21 @@ export function LedgerGroupPanel({
               </div>
 
               {/* 內嵌 QR Code 視覺化元件 */}
-              {!firebaseMode && <div
+              <div
                 aria-label="群組邀請 QR Code"
                 className="flex flex-col items-center rounded-lg border border-slate-200 bg-white p-3 shadow-xs"
               >
-                <svg
-                  width="88"
-                  height="88"
-                  viewBox="0 0 88 88"
-                  role="img"
-                  aria-label={`邀請碼 ${activeLedger.invite.code} QR Code`}
-                >
-                  <rect width="88" height="88" fill="#ffffff" />
-                  <rect x="8" y="8" width="24" height="24" fill="#0f172a" />
-                  <rect x="12" y="12" width="16" height="16" fill="#ffffff" />
-                  <rect x="16" y="16" width="8" height="8" fill="#0f172a" />
-                  <rect x="56" y="8" width="24" height="24" fill="#0f172a" />
-                  <rect x="60" y="12" width="16" height="16" fill="#ffffff" />
-                  <rect x="64" y="16" width="8" height="8" fill="#0f172a" />
-                  <rect x="8" y="56" width="24" height="24" fill="#0f172a" />
-                  <rect x="12" y="60" width="16" height="16" fill="#ffffff" />
-                  <rect x="16" y="64" width="8" height="8" fill="#0f172a" />
-                  <rect x="40" y="16" width="8" height="8" fill="#059669" />
-                  <rect x="40" y="32" width="8" height="16" fill="#0f172a" />
-                  <rect x="24" y="40" width="16" height="8" fill="#0f172a" />
-                  <rect x="56" y="44" width="16" height="8" fill="#059669" />
-                  <rect x="44" y="60" width="12" height="12" fill="#0f172a" />
-                  <rect x="64" y="64" width="16" height="16" fill="#0f172a" />
-                </svg>
+                <QRCodeSVG
+                  value={inviteLink}
+                  size={120}
+                  includeMargin
+                  title={`群組邀請連結 QR Code：${activeLedger.invite.code}`}
+                />
                 <span className="mt-1 text-[11px] font-medium text-slate-600">
                   QR Code
                 </span>
-              </div>}
+              </div>
             </div>
-            {firebaseMode && (
-              <p className="mt-3 text-xs text-amber-800">
-                持有此連結的人可在邀請啟用期間加入為編輯者，請只分享給信任的組員。
-              </p>
-            )}
           </div>
 
           {/* User Story 9：管理群組成員 */}

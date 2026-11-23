@@ -76,7 +76,9 @@ export function TransactionPanel({
   const [title, setTitle] = React.useState("");
   const [amountStr, setAmountStr] = React.useState("");
   const [payerId, setPayerId] = React.useState(currentUserUid);
-  const [date, setDate] = React.useState("2026-11-16");
+  const [date, setDate] = React.useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
   const [category, setCategory] = React.useState<ExpenseCategory>("餐飲");
   const [splitMethod, setSplitMethod] = React.useState<SplitMethod>("equal");
   const [participants, setParticipants] = React.useState<string[]>(
@@ -122,12 +124,11 @@ export function TransactionPanel({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const parsedAmount =
-      amountStr.trim() === "" ? 0 : Number.parseInt(amountStr.trim(), 10);
+    const parsedAmount = amountStr.trim() === "" ? 0 : Number(amountStr.trim());
     const customSplits: Record<string, number> = {};
     for (const uid of participants) {
       const rawVal = customSplitStrs[uid]?.trim() ?? "0";
-      const parsedVal = rawVal === "" ? 0 : Number.parseInt(rawVal, 10);
+      const parsedVal = rawVal === "" ? 0 : Number(rawVal);
       customSplits[uid] = Number.isNaN(parsedVal) ? 0 : parsedVal;
     }
 
@@ -185,7 +186,7 @@ export function TransactionPanel({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} noValidate className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <label
@@ -198,6 +199,7 @@ export function TransactionPanel({
                   id="expense-title-input"
                   placeholder="例如：海鮮合菜晚餐"
                   value={title}
+                  maxLength={200}
                   onChange={(e) => setTitle(e.target.value)}
                 />
               </div>
@@ -211,6 +213,8 @@ export function TransactionPanel({
                 <Input
                   id="expense-amount-input"
                   type="number"
+                  min="1"
+                  max="1000000000000"
                   step="1"
                   placeholder="請輸入正整數金額，例如 1000"
                   value={amountStr}
@@ -335,6 +339,8 @@ export function TransactionPanel({
                         <div className="w-28">
                           <Input
                             type="number"
+                              min="0"
+                              max="1000000000000"
                             step="1"
                             aria-label={`${displayName}分攤金額`}
                             placeholder="金額"

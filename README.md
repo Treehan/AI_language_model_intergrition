@@ -13,16 +13,13 @@ npm ci
 npm run dev
 ```
 
-### 連接 Firebase 雲端資料
+### Firebase 雲端設定
 
-1. 在 Firebase 專案設定的「一般」頁面建立或選取 Web App，複製 Firebase Web 設定。
-2. 複製 `.env.example` 為 `.env.local`，填入六個 `NEXT_PUBLIC_FIREBASE_*` 設定值，並將 `NEXT_PUBLIC_FIREBASE_ENABLED` 設為 `true`。
-3. 確認 Firebase Authentication 已啟用 Email/Password 登入，且 Firestore 與此專案目前部署的安全規則已準備好。
-4. 重新啟動 `npm run dev`。在畫面註冊或登入後，建立、修改的帳本資料會寫入 Firestore，其他登入同一群組的成員也會即時收到更新。
+將 `.env.example` 複製為 `.env.local`，填入 Firebase Web App 設定值，並將 `NEXT_PUBLIC_FIREBASE_ENABLED` 設為 `true`。Firebase Console 需啟用 Email/Password 登入及 Firestore；Email 註冊須先完成驗證信確認才能登入。Phone 登入使用 SMS 驗證碼，不使用密碼。
 
-Firebase Web 設定供瀏覽器 SDK 使用，並非服務帳戶憑證；不要把 Service Account 私鑰或帳號密碼放進 `.env.local`。此檔已被 Git 忽略。將 Firebase 開關設為 `false` 可回到本機範例模式。
+Firebase 模式下，登入者的帳本、支出、還款與通知會同步至 Firestore 並即時更新；關閉 `NEXT_PUBLIC_FIREBASE_ENABLED` 則使用本機範例資料。`.env.local` 已被 Git 忽略。Firebase Web 設定不是服務帳戶憑證，勿將 Service Account 私鑰或帳號密碼放入此檔。
 
-雲端邀請連結是加入帳本的憑證；持有連結的人可在邀請啟用時以編輯者身分加入，請勿公開張貼。現行 Firestore 規則尚未驗證邀請期限或邀請碼，且尚未限制加入操作只能變更該成員資料；在規則完成強化並部署前，請勿分享邀請連結給不受信任的人。
+雲端邀請連結可作為加入憑證，請勿公開張貼。現行 Firestore 規則尚未驗證邀請期限或邀請碼，也未限制加入操作只能變更該成員資料；在規則完成強化並部署前，請勿將連結分享給不受信任的人。
 
 ## 驗證與測試命令
 
