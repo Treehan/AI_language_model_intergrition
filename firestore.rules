@@ -1,0 +1,378 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model (假設資料模型與結構規範)
+// ===============================================================
+//
+// 本安全規則檔案實作「小組記帳與分帳 App」之共用帳本權限控制 (RBAC)
+// 與交易防竄改驗證，嚴格遵守 ARCHITECTURE.md 三大核心支柱規範：
+//
+// 1. Collection: /users/{userId}
+//    Fields:
+//      - uid: string (required, matches userId, immutable) - 使用者唯一識別碼
+//      - email: string (optional, <= 254 chars) - 電子郵件
+//      - displayName: string (optional, <= 100 chars) - 顯示暱稱
+//      - phone: string (optional, <= 30 chars) - 手機號碼
+//      - createdAt: string (optional, <= 64 chars) - 建立時間
+//
+// 2. Collection: /ledgers/{ledgerId}
+//    Fields:
+//      - name: string (required, 1..100 chars) - 帳本群組名稱
+//      - currency: string (required, <= 10 chars) - 幣別代碼 (如 TWD, JPY, USD)
+//      - members: list of string (required, 1..100 items) - 成員 UID 清單
+//      - roles: map of uid -> "Owner" | "Editor" | "Member" | "Viewer" - 成員角色對應表
+//      - memberProfiles: map (optional) - 成員顯示資訊對應表
+//      - invite: map (optional, { code, active, expiresAt, createdBy }) - 邀請連結設定
+//      - createdAt, updatedAt: string (optional) - 時間戳記字串
+//
+// 3. Subcollection: /ledgers/{ledgerId}/transactions/{transactionId}
+//    Fields:
+//      - title: string (optional/required, <= 200 chars) - 支出項目名稱
+//      - amount: int (required, > 0) - 支出總金額（正整數最小單位，嚴禁浮點數）
+//      - payerId: string (required, in ledger.members) - 付款人 UID
+//      - createdBy: string (required, == request.auth.uid on create) - 建立者 UID
+//      - date, category, splitMethod, participants, splits, createdAt, updatedAt, history
+//
+// 4. Subcollection: /ledgers/{ledgerId}/repayments/{repaymentId}
+//    Fields:
+//      - fromUid: string (required, == request.auth.uid on create) - 還款人 UID
+//      - toUid: string (required, in ledger.members) - 收款人 UID
+//      - amount: int (required, > 0) - 還款金額（正整數最小單位）
+//      - status: string (required, "pending" | "confirmed") - 還款狀態
+//      - createdAt, confirmedAt: string (optional)
+//
+// 5. Subcollection: /ledgers/{ledgerId}/notifications/{notificationId}
+//    Fields:
+//      - recipientUid: string (required) - 接收通知之成員 UID
+//      - message: string (optional, <= 500 chars) - 通知訊息內容
+//      - read: bool (optional) - 是否已讀
+//      - ledgerId, createdAt: string (optional)
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions (共用輔助驗證函式)
+    // ===============================================================
+
+    // 檢查使用者是否已登入驗證
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // 檢查是否為本人帳號資料
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 檢查單一可選字串欄位之型別與長度上限（防止 1MB DoS 攻擊，同時兼容單元測試最小 Payload）
+    function isValidOptionalString(data, field, minLen, maxLen) {
+      return !(field in data) ||
+             (data[field] is string &&
+              data[field].size() >= minLen &&
+              data[field].size() <= maxLen);
+    }
+
+    // 檢查正整數金額（嚴格執行 Pillar 1：禁止浮點數，必須為大於 0 之整數 int）
+    function isPositiveInt(val) {
+      return val is int && val > 0 && val <= 1000000000000;
+    }
+
+    // 取得父層共用帳本資料
+    function getLedgerData(ledgerId) {
+      return get(/databases/$(database)/documents/ledgers/$(ledgerId)).data;
+    }
+
+    // 檢查當前登入者是否為指定帳本之成員
+    function isLedgerMember(ledgerData) {
+      return isAuthenticated() &&
+             ('members' in ledgerData) &&
+             ledgerData.members is list &&
+             request.auth.uid in ledgerData.members;
+    }
+
+    // 檢查當前登入者在帳本中是否具有指定角色清單內之權限
+    function hasLedgerRole(ledgerData, allowedRoles) {
+      return isLedgerMember(ledgerData) &&
+             ('roles' in ledgerData) &&
+             ledgerData.roles is map &&
+             (request.auth.uid in ledgerData.roles) &&
+             (ledgerData.roles[request.auth.uid] in allowedRoles);
+    }
+
+    // ===============================================================
+    // Domain Validators (領域模型驗證函式 - 同時用於 create 與 update)
+    // ===============================================================
+
+    // 驗證使用者個人檔案資料
+    function isValidUserProfile(data, userId) {
+      return (!('uid' in data) || data.uid == userId) &&
+             isValidOptionalString(data, 'email', 0, 254) &&
+             isValidOptionalString(data, 'displayName', 0, 100) &&
+             isValidOptionalString(data, 'phone', 0, 30) &&
+             isValidOptionalString(data, 'createdAt', 0, 64);
+    }
+
+    // 驗證共用帳本主文件結構
+    function isValidLedger(data) {
+      return ('name' in data) && data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             ('currency' in data) && data.currency is string && data.currency.size() > 0 && data.currency.size() <= 10 &&
+             ('members' in data) && data.members is list && data.members.size() > 0 && data.members.size() <= 100 &&
+             ('roles' in data) && data.roles is map && data.roles.size() > 0 && data.roles.size() <= 100 &&
+             (!('memberProfiles' in data) || (data.memberProfiles is map && data.memberProfiles.size() <= 100)) &&
+             (!('invite' in data) || (
+               data.invite is map &&
+               (!('code' in data.invite) || (data.invite.code is string && data.invite.code.size() <= 64)) &&
+               (!('active' in data.invite) || data.invite.active is bool) &&
+               (!('expiresAt' in data.invite) || (data.invite.expiresAt is string && data.invite.expiresAt.size() <= 64)) &&
+               (!('createdBy' in data.invite) || (data.invite.createdBy is string && data.invite.createdBy.size() <= 128))
+             )) &&
+             isValidOptionalString(data, 'createdAt', 0, 64) &&
+             isValidOptionalString(data, 'updatedAt', 0, 64);
+    }
+
+    // 驗證交易紀錄資料（強制正整數金額與字串長度邊界）
+    function isValidTransaction(data) {
+      return ('amount' in data) && isPositiveInt(data.amount) &&
+             ('payerId' in data) && data.payerId is string && data.payerId.size() > 0 && data.payerId.size() <= 128 &&
+             ('createdBy' in data) && data.createdBy is string && data.createdBy.size() > 0 && data.createdBy.size() <= 128 &&
+             isValidOptionalString(data, 'id', 0, 128) &&
+             isValidOptionalString(data, 'ledgerId', 0, 128) &&
+             isValidOptionalString(data, 'title', 0, 200) &&
+             isValidOptionalString(data, 'date', 0, 32) &&
+             isValidOptionalString(data, 'category', 0, 32) &&
+             isValidOptionalString(data, 'splitMethod', 0, 32) &&
+             isValidOptionalString(data, 'createdAt', 0, 64) &&
+             isValidOptionalString(data, 'updatedAt', 0, 64) &&
+             (!('participants' in data) || (data.participants is list && data.participants.size() <= 100)) &&
+             (!('splits' in data) || (data.splits is map && data.splits.size() <= 100)) &&
+             (!('history' in data) || (data.history is list && data.history.size() <= 500));
+    }
+
+    // 驗證還款紀錄資料
+    function isValidRepayment(data) {
+      return ('fromUid' in data) && data.fromUid is string && data.fromUid.size() > 0 && data.fromUid.size() <= 128 &&
+             ('toUid' in data) && data.toUid is string && data.toUid.size() > 0 && data.toUid.size() <= 128 &&
+             ('amount' in data) && isPositiveInt(data.amount) &&
+             ('status' in data) && data.status in ['pending', 'confirmed'] &&
+             isValidOptionalString(data, 'id', 0, 128) &&
+             isValidOptionalString(data, 'ledgerId', 0, 128) &&
+             isValidOptionalString(data, 'createdAt', 0, 64) &&
+             isValidOptionalString(data, 'confirmedAt', 0, 64);
+    }
+
+    // 驗證系統通知資料
+    function isValidNotification(data) {
+      return (!('recipientUid' in data) || (data.recipientUid is string && data.recipientUid.size() > 0 && data.recipientUid.size() <= 128)) &&
+             isValidOptionalString(data, 'id', 0, 128) &&
+             isValidOptionalString(data, 'ledgerId', 0, 128) &&
+             isValidOptionalString(data, 'message', 0, 500) &&
+             isValidOptionalString(data, 'createdAt', 0, 64) &&
+             (!('read' in data) || data.read is bool);
+    }
+
+    // ===============================================================
+    // 1. 使用者帳號集合 (/users/{userId})
+    // ===============================================================
+    match /users/{userId} {
+      // 已登入之使用者可查詢單一使用者基本檔案以顯示群組成員資訊
+      allow get: if isAuthenticated();
+      allow list: if isOwner(userId);
+
+      // 僅允許使用者本人建立與更新自己的個人檔案，且不可竄改 uid
+      allow create: if isOwner(userId) &&
+                    isValidUserProfile(request.resource.data, userId);
+
+      allow update: if isOwner(userId) &&
+                    isValidUserProfile(request.resource.data, userId) &&
+                    (!('uid' in resource.data) || !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid);
+
+      // 僅允許使用者本人刪除自己的帳號檔案
+      allow delete: if isOwner(userId);
+    }
+
+    // ===============================================================
+    // 2. 共用帳本集合 (/ledgers/{ledgerId})
+    // ===============================================================
+    match /ledgers/{ledgerId} {
+      // 讀取權限 (get, list)：僅限該帳本之 members 陣列內的已驗證成員
+      allow read: if isAuthenticated() &&
+                  request.auth.uid in resource.data.members;
+
+      // 建立權限：已登入使用者，且必須將自己加入 members 並設定角色為 'Owner'
+      allow create: if isAuthenticated() &&
+                    isValidLedger(request.resource.data) &&
+                    request.auth.uid in request.resource.data.members &&
+                    request.resource.data.roles[request.auth.uid] == 'Owner';
+
+      // 更新權限：
+      // (A) 帳本管理者 (Owner) 可更新帳本設定與成員名單
+      // (B) 新成員透過有效邀請連結 (invite.active == true) 加入帳本成為 'Editor'，且不可修改既有帳本名稱與幣別
+      allow update: if isAuthenticated() &&
+                    isValidLedger(request.resource.data) &&
+                    (
+                      (
+                        request.auth.uid in resource.data.members &&
+                        resource.data.roles[request.auth.uid] == 'Owner'
+                      ) ||
+                      (
+                        ('invite' in resource.data) &&
+                        resource.data.invite is map &&
+                        resource.data.invite.active == true &&
+                        !(request.auth.uid in resource.data.members) &&
+                        request.auth.uid in request.resource.data.members &&
+                        request.resource.data.roles[request.auth.uid] == 'Editor' &&
+                        request.resource.data.name == resource.data.name &&
+                        request.resource.data.currency == resource.data.currency
+                      )
+                    );
+
+      // 刪除權限：僅限帳本之 Owner
+      allow delete: if isAuthenticated() &&
+                    request.auth.uid in resource.data.members &&
+                    resource.data.roles[request.auth.uid] == 'Owner';
+
+      // =============================================================
+      // 3. 帳本交易紀錄子集合 (/ledgers/{ledgerId}/transactions/{transactionId})
+      // =============================================================
+      match /transactions/{transactionId} {
+        // 輔助函式：檢查交易新增權限與防竄改規則
+        function canCreateTransaction(ledger) {
+          return isLedgerMember(ledger) &&
+                 hasLedgerRole(ledger, ['Owner', 'Editor', 'Member']) &&
+                 (request.resource.data.payerId in ledger.members) &&
+                 (
+                   request.resource.data.payerId == request.auth.uid ||
+                   hasLedgerRole(ledger, ['Owner', 'Editor'])
+                 );
+        }
+
+        // 輔助函式：檢查交易更新權限
+        function canUpdateTransaction(ledger) {
+          return isLedgerMember(ledger) &&
+                 (request.resource.data.payerId in ledger.members) &&
+                 (
+                   hasLedgerRole(ledger, ['Owner', 'Editor']) ||
+                   (
+                     hasLedgerRole(ledger, ['Member']) &&
+                     resource.data.createdBy == request.auth.uid &&
+                     request.resource.data.payerId == request.auth.uid
+                   )
+                 );
+        }
+
+        // 輔助函式：檢查交易刪除權限
+        function canDeleteTransaction(ledger) {
+          return isLedgerMember(ledger) &&
+                 (
+                   hasLedgerRole(ledger, ['Owner', 'Editor']) ||
+                   (
+                     hasLedgerRole(ledger, ['Member']) &&
+                     resource.data.createdBy == request.auth.uid
+                   )
+                 );
+        }
+
+        // 讀取權限：僅限父帳本之已驗證成員
+        allow read: if isLedgerMember(getLedgerData(ledgerId));
+
+        // 新增權限：
+        // - 必須為父帳本成員，且角色非 Viewer（僅允許 Owner、Editor、Member）
+        // - 金額必須為正整數 (amount is int && amount > 0)
+        // - 建立者 (createdBy) 必須為當前登入者本人
+        // - 付款人 (payerId) 必須為父帳本成員
+        // - 防竄改交易原則 (Pillar 2 Tamper-Proof Transactions)：
+        //   一般成員 ('Member') 僅能新增自己本人付款 (payerId == request.auth.uid) 的交易；
+        //   唯有具備明確編輯權限 ('Owner' 或 'Editor') 之成員，才可代他人新增付款人為其他群組成員之交易
+        allow create: if isValidTransaction(request.resource.data) &&
+                      request.resource.data.createdBy == request.auth.uid &&
+                      canCreateTransaction(getLedgerData(ledgerId));
+
+        // 更新權限：
+        // - 必須為父帳本成員，且金額維持正整數
+        // - 付款人 (payerId) 仍必須為帳本成員；若為一般成員 ('Member') 則不可將付款人改為他人
+        // - 具備 'Owner' 或 'Editor' 角色可修改任何交易，或 'Member' 可修改自己建立 (createdBy == request.auth.uid) 的交易
+        allow update: if isValidTransaction(request.resource.data) &&
+                      request.resource.data.createdBy == resource.data.createdBy &&
+                      canUpdateTransaction(getLedgerData(ledgerId));
+
+        // 刪除權限：
+        // - 具備 'Owner' 或 'Editor' 角色可刪除任何交易，或 'Member' 可刪除自己建立的交易
+        allow delete: if canDeleteTransaction(getLedgerData(ledgerId));
+      }
+
+      // =============================================================
+      // 4. 帳本還款紀錄子集合 (/ledgers/{ledgerId}/repayments/{repaymentId})
+      // =============================================================
+      match /repayments/{repaymentId} {
+        // 輔助函式：檢查還款建立權限
+        function canCreateRepayment(ledger) {
+          return isLedgerMember(ledger) &&
+                 (request.resource.data.toUid in ledger.members);
+        }
+
+        // 輔助函式：檢查還款更新（確認收款）權限
+        function canUpdateRepayment(ledger) {
+          return isLedgerMember(ledger) &&
+                 (
+                   resource.data.toUid == request.auth.uid ||
+                   hasLedgerRole(ledger, ['Owner'])
+                 );
+        }
+
+        // 讀取權限：僅限父帳本之已驗證成員
+        allow read: if isLedgerMember(getLedgerData(ledgerId));
+
+        // 建立權限：
+        // - 必須為父帳本成員
+        // - 還款發起人 (fromUid) 必須為當前登入者本人
+        // - 收款人 (toUid) 必須為父帳本成員
+        // - 還款金額必須為正整數 (amount is int && amount > 0)
+        // - 初始狀態必須為 'pending'
+        allow create: if isValidRepayment(request.resource.data) &&
+                      request.resource.data.fromUid == request.auth.uid &&
+                      request.resource.data.status == 'pending' &&
+                      canCreateRepayment(getLedgerData(ledgerId));
+
+        // 更新權限：
+        // - 必須為父帳本成員
+        // - 僅允許收款人本人 (resource.data.toUid == request.auth.uid) 確認收款，或帳本管理者 (Owner) 更新
+        // - 不可竄改原有之還款金額 (amount)、還款人 (fromUid) 與收款人 (toUid)
+        allow update: if isValidRepayment(request.resource.data) &&
+                      request.resource.data.amount == resource.data.amount &&
+                      request.resource.data.fromUid == resource.data.fromUid &&
+                      request.resource.data.toUid == resource.data.toUid &&
+                      canUpdateRepayment(getLedgerData(ledgerId));
+
+        // 刪除權限：僅限父帳本之 Owner
+        allow delete: if hasLedgerRole(getLedgerData(ledgerId), ['Owner']);
+      }
+
+      // =============================================================
+      // 5. 帳本系統通知子集合 (/ledgers/{ledgerId}/notifications/{notificationId})
+      // =============================================================
+      match /notifications/{notificationId} {
+        // 讀取與建立權限：僅限父帳本之已驗證成員
+        allow read: if isLedgerMember(getLedgerData(ledgerId));
+
+        allow create: if isValidNotification(request.resource.data) &&
+                      isLedgerMember(getLedgerData(ledgerId));
+
+        // 更新權限：僅允許通知接收者本人 (recipientUid == request.auth.uid) 標記已讀狀態
+        allow update: if isAuthenticated() &&
+                      isValidNotification(request.resource.data) &&
+                      resource.data.recipientUid == request.auth.uid &&
+                      request.resource.data.recipientUid == resource.data.recipientUid;
+
+        // 禁止一般成員刪除通知，僅限帳本 Owner 可清理
+        allow delete: if hasLedgerRole(getLedgerData(ledgerId), ['Owner']);
+      }
+    }
+
+    // 預設拒絕所有其他未定義路徑之讀寫請求 (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
