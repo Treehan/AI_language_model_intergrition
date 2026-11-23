@@ -3,7 +3,6 @@ import {
   deleteUser,
   onAuthStateChanged,
   RecaptchaVerifier,
-  sendEmailVerification,
   signInWithEmailAndPassword,
   signInWithPhoneNumber,
   signOut,
@@ -85,7 +84,7 @@ export function subscribeToAuthState(
   }
 
   return onAuthStateChanged(getFirebaseClientAuth(), (user) => {
-    if (!user || (user.email && !user.emailVerified)) {
+    if (!user) {
       listener(null);
       return;
     }
@@ -145,8 +144,6 @@ export async function registerEmailAccount(params: {
     params.password,
   );
   await updateProfile(credential.user, { displayName });
-  await sendEmailVerification(credential.user);
-  await signOut(auth);
 }
 
 export async function loginEmailAccount(params: {
@@ -171,15 +168,11 @@ export async function loginEmailAccount(params: {
     return;
   }
 
-  const credential = await signInWithEmailAndPassword(
+  await signInWithEmailAndPassword(
     getFirebaseClientAuth(),
     email,
     params.password,
   );
-  if (!credential.user.emailVerified) {
-    await signOut(getFirebaseClientAuth());
-    throw new Error("請先至信箱完成電子郵件驗證，再登入");
-  }
 }
 
 export function createPhoneRecaptchaVerifier(

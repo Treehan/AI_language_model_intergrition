@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   getAuthErrorMessage,
-  isTestAuthEnabledForUi,
   loginEmailAccount,
   registerEmailAccount,
   validateEmailOnly,
@@ -80,18 +79,12 @@ export function AppHeader({
           displayName,
         });
         setLocalAuthSuccess(
-          isTestAuthEnabledForUi()
-            ? `歡迎 ${displayName.trim()}！已成功建立帳號並登入`
-            : "驗證信已寄出，請先完成電子郵件驗證，再返回登入。",
+          `歡迎 ${displayName.trim()}！已成功建立帳號並登入`,
         );
-        if (isTestAuthEnabledForUi()) {
-          setEmail("");
-          setPassword("");
-          setDisplayName("");
-          setShowAuthModal(false);
-        } else {
-          setPassword("");
-        }
+        setEmail("");
+        setPassword("");
+        setDisplayName("");
+        setShowAuthModal(false);
       } else {
         await loginEmailAccount({ email: trimmedEmail, password });
         setLocalAuthSuccess("登入成功");
