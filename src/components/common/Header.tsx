@@ -81,6 +81,7 @@ export function AppHeader({
     setAuthMode(mode);
     setLocalAuthError(null);
     setLocalAuthSuccess(null);
+    setConfirmingDelete(false);
     resetPhoneVerification();
   };
 
@@ -275,7 +276,10 @@ export function AppHeader({
                   type="button"
                   size="sm"
                   variant="ghost"
-                  onClick={() => setShowAuthModal(false)}
+                  onClick={() => {
+                    setShowAuthModal(false);
+                    setConfirmingDelete(false);
+                  }}
                 >
                   關閉
                 </Button>
