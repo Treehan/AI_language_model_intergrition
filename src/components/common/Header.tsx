@@ -228,13 +228,17 @@ export function AppHeader({
                   htmlFor="auth-identifier-input"
                   className="mb-1 block text-xs font-medium text-slate-700"
                 >
-                  電子郵件或手機號碼
+                  {firebaseMode ? "電子郵件" : "電子郵件或手機號碼"}
                 </label>
                 <Input
                   id="auth-identifier-input"
                   type={firebaseMode ? "email" : "text"}
                   aria-label={firebaseMode ? "電子郵件" : undefined}
-                  placeholder="例如：newuser@example.com 或 0912345678"
+                  placeholder={
+                    firebaseMode
+                      ? "例如：newuser@example.com"
+                      : "例如：newuser@example.com 或 0912345678"
+                  }
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   required
