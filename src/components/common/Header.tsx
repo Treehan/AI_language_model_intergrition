@@ -24,7 +24,7 @@ export interface AppHeaderProps {
   authError?: string | null;
   authSuccess?: string | null;
   onDeleteAccount: () => Promise<boolean>;
-  onAuthProfileChanged: (profile: AuthenticatedProfile) => void;
+  onAuthProfileChanged?: (profile: AuthenticatedProfile) => void;
   onSwitchTestUser: (uid: string) => void;
   onLogout: () => void;
 }
@@ -36,7 +36,6 @@ export function AppHeader({
   authError,
   authSuccess,
   onDeleteAccount,
-  onAuthProfileChanged,
   onSwitchTestUser,
   onLogout,
 }: AppHeaderProps) {
